@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "socket-server-rs",
+    "socket-client-rs"
+]
+
+[workspace.dependencies.anyhow]
+version = "1"
+
+[workspace.dependencies.clap]
+version = "4"
+features = ["derive"]
+
+[workspace.dependencies.socket2]
+version = "0.5"
