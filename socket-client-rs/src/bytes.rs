@@ -63,6 +63,7 @@ enum MessageCmds {
 }
 
 impl MessageCmds {
+    /// generates the specified message
     fn get_message(&self) -> Result<Vec<u8>> {
         let rtn = match self {
             MessageCmds::Ping => {
@@ -105,6 +106,7 @@ impl Default for MessageCmds {
     }
 }
 
+/// handles the bytes command
 pub fn handle(mut stream: TcpStream, mut args: BytesArgs) -> Result<()> {
     let command = args.command.take().unwrap_or_default();
 
@@ -149,6 +151,10 @@ pub fn handle(mut stream: TcpStream, mut args: BytesArgs) -> Result<()> {
     Ok(())
 }
 
+/// writes the given bytes slice to the tcp stream
+///
+/// will write until all bytes of the given slice have been written to the
+/// stream
 fn write_to_socket(stream: &mut TcpStream, bytes: &[u8], chunk_size: usize) -> Result<()> {
     let mut total_wrote = 0usize;
     let mut start_index = 0usize;
@@ -181,6 +187,9 @@ fn write_to_socket(stream: &mut TcpStream, bytes: &[u8], chunk_size: usize) -> R
     Ok(())
 }
 
+/// reads bytes from the tcp stream
+///
+/// will read until the expected amount of bytes have been received
 fn read_from_socket(stream: &mut TcpStream, expected_read: usize, chunk_size: usize) -> Result<()> {
     let mut buffer = vec![0u8; chunk_size];
     let mut total_read = 0usize;

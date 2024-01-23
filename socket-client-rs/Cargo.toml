@@ -9,5 +9,8 @@ edition = "2021"
 anyhow = { workspace = true }
 clap = { workspace = true }
 
+socket2 = { workspace = true }
+
 rand = { version = "0.8" }
 dns-lookup = { version = "2" }
+
