@@ -10,8 +10,8 @@ all: $(EXE)
 
 # Implicit rules defined by Make, but you can redefine if needed
 #
-#h1-counter: h1-counter.c
-#	$(CC) $(CFLAGS) h1-counter.c $(LDLIBS) -o h1-counter
+h1-counter: h1-counter.c
+	$(CC) $(CFLAGS) h1-counter.c $(LDLIBS) -o h1-counter
 #
 # OR
 #

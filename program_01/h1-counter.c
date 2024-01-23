@@ -5,15 +5,16 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <string.h>
 #include <unistd.h>
+#include <getopt.h>
 
 #define SERVER_PORT "9000"
 #define MAX_LINE 256
 
 #define HTTP_CRLF "\n\r"
-
 
 /**
  * Lookup a host IP address and connect to it using service. Arguments match the first two
@@ -24,7 +25,68 @@
  */
 int lookup_and_connect(const char *host, const char *service);
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
+    // will be either a valid ipv4/ipv6 address or dns record to lookup
+    unsigned short local_port = 0;
+    unsigned short remote_port = 9000;
+    char *local_ip = "::\0";
+    char *remote_host = NULL;
+
+    static struct option long_options[] = {
+        {"local-ip", required_argument, 0, 0},
+        {"local-port", required_argument, 0, 0},
+        {"remote-host", required_argument, 0, 0},
+        {"remote-port", required_argument, 0, 0},
+        {0, 0, 0, 0}
+    };
+
+    int c;
+
+    while (1) {
+        int option_index = 0;
+
+        c = getopt_long(argc, argv, "", long_options, &option_index);
+
+        if (c == -1) {
+            break;
+        }
+
+        switch (c) {
+        case 0:
+            switch (option_index) {
+            case 0:
+                printf("local-ip arg given %s\n", optarg);
+                break;
+            case 1:
+                printf("local-port arg given %s\n", optarg);
+                break;
+            case 2:
+                printf("remote-host arg given %s\n", optarg);
+                remote_host = optarg;
+                break;
+            case 3:
+                printf("remote-port arg given %s\n", optarg);
+                break;
+            default:
+                printf("unknown argument given?");
+                break;
+            }
+
+            break;
+        default:
+            return 1;
+        }
+    }
+
+    if (remote_addr == NULL) {
+        printf("remote-host was not specified\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+int main2(int argc, char *argv[]) {
     char *host;
     char buf[MAX_LINE];
     int s;
