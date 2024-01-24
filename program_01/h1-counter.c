@@ -122,6 +122,32 @@ int main(int argc, char **argv) {
 
     char *buffer = (char*)malloc(buffer_size * sizeof(char));
     ssize_t read;
+    ssize_t total_read = 0;
+
+    for (uint32_t safety = 0; safety < 1000; ++safety) {
+        printf("waiting for data\n");
+
+        read = recv(sockfd, buffer, buffer_size, 0);
+
+        if (read == -1) {
+            perror("error reading data from remote host");
+            break;
+        }
+
+        total_read += read;
+
+        printf("[%ld]:", read);
+
+        for (ssize_t i = 0; i < read; ++i) {
+            printf(" %#x", buffer[i]);
+        }
+
+        printf("\n");
+
+        if (total_read == length) {
+            break;
+        }
+    }
 
     free(buffer);
     close(sockfd);
