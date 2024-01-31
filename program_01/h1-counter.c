@@ -14,9 +14,9 @@
 int send_bytes(int sockfd, char *bytes, size_t length);
 
 void print_addrinfo(struct addrinfo *rp);
+void print_buffer(const char *buffer, size_t len);
 
 int bind_socket(int *s, int af_family, const char *l_ip, const char *l_port);
-
 int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char *r_host, const char *r_port);
 
 int main(int argc, char **argv) {
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char request[] = "GET / HTTP/1.0\r\n";
+    char request[]  = "GET /~kkredo/file.html HTTP/1.0\r\n\r\n";
     size_t length = strlen(request);
 
     if (send_bytes(sockfd, request, length) == -1) {
@@ -103,34 +103,53 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char *buffer = (char*)malloc(buffer_size * sizeof(char));
+    size_t buffer_len = buffer_size * sizeof(char);
+    size_t h1_count = 0;
+    size_t index = 0;
+    size_t check_read = 0;
     ssize_t read;
     ssize_t total_read = 0;
+    char opening[] = "<h1>";
 
-    for (uint32_t safety = 0; safety < 1000; ++safety) {
-        printf("waiting for data\n");
+    char *buffer = (char*)malloc(buffer_len);
 
-        read = recv(sockfd, buffer, buffer_size, 0);
+    while (1) {
+        memset(buffer, 0, buffer_len);
 
-        if (read == -1) {
-            perror("error reading data from remote host");
+        read = recv(sockfd, buffer, buffer_len, 0);
+
+        if (read <= 0) {
+            if (read == -1) {
+                perror("error reading data from remote host");
+            }
+
             break;
         }
 
         total_read += read;
 
-        printf("[%ld]:", read);
+        for (index = 0; index < read; ++index) {
+            if (buffer[index] == '<') {
+                // start checking to see if the next set of bytes is an h1
+                // opening tag
+                for (check_read = 0; check_read < 4 && index < read; ++index) {
+                    if (opening[check_read] != buffer[index]) {
+                        break;
+                    }
 
-        for (ssize_t i = 0; i < read; ++i) {
-            printf(" %#x", buffer[i]);
-        }
+                    check_read += 1;
+                }
 
-        printf("\n");
-
-        if (total_read == length) {
-            break;
+                // if we checked the next 4 characters then we found an opening
+                // tag
+                if (check_read == 4) {
+                    h1_count += 1;
+                }
+            }
         }
     }
+
+    printf("total %ld | h1 %ld\n", total_read, h1_count);
 
     free(buffer);
     close(sockfd);
@@ -156,6 +175,18 @@ int send_bytes(int sockfd, char *bytes, size_t length) {
     return 0;
 }
 
+void print_buffer(const char *buffer, size_t len) {
+    printf("[%ld]:", len);
+
+    for (ssize_t i = 0; i < len; ++i) {
+        printf(" %#x", buffer[i]);
+    }
+
+    printf("\n");
+
+    printf("%s\n", buffer);
+}
+
 void print_addrinfo(struct addrinfo *rp) {
     char addr_str[INET6_ADDRSTRLEN];
 
@@ -167,7 +198,7 @@ void print_addrinfo(struct addrinfo *rp) {
             return;
         }
 
-        printf("%s", addr_str);
+        printf("%s:%d", addr_str, v4->sin_port);
     } else if (rp->ai_family == AF_INET6) {
         struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)rp->ai_addr;
 
@@ -176,7 +207,7 @@ void print_addrinfo(struct addrinfo *rp) {
             return;
         }
 
-        printf("%s", addr_str);
+        printf("%s:%d", addr_str, v6->sin6_port);
     } else {
         printf("family: %d | socktype: %d | protocol: %d", rp->ai_family, rp->ai_socktype, rp->ai_protocol);
     }
@@ -231,6 +262,14 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
 }
 
 int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char *r_host, const char *r_port) {
+    printf("attempting to connect with remote server %s", r_host);
+
+    if (r_port != NULL) {
+        printf(":%s", r_port);
+    }
+
+    printf("\n");
+
     struct addrinfo hints;
     struct addrinfo *result, *rp;
 
@@ -253,15 +292,15 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
     }
 
     for (rp = result; rp != NULL; rp = rp->ai_next) {
+        if (bind_socket(sockfd, rp->ai_family, l_ip, l_port) == -1) {
+            continue;
+        }
+
         printf("connecting ");
 
         print_addrinfo(rp);
 
         printf("\n");
-
-        if (bind_socket(sockfd, rp->ai_family, l_ip, l_port) == -1) {
-            continue;
-        }
 
         if (connect(*sockfd, rp->ai_addr, rp->ai_addrlen) != -1) {
             freeaddrinfo(result);
