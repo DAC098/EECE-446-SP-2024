@@ -21,9 +21,9 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
 
 int main(int argc, char **argv) {
     char *local_port = "0";
-    char *remote_port = "9000";
+    char *remote_port = "80";
     char *local_ip = NULL;
-    char *remote_host = NULL;
+    char *remote_host = "www.ecst.csuchico.edu";
     size_t buffer_size = 2048;
 
     static struct option long_options[] = {
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("total %ld | h1 %ld\n", total_read, h1_count);
+    printf("Number of <h1> tags: %ld\nNumber of bytes: %ld\n", h1_count, total_read);
 
     free(buffer);
     close(sockfd);
