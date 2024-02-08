@@ -22,14 +22,16 @@
  */
 int bind_and_listen(const char *service);
 
+int send_bytes(int sockfd, uint8_t *bytes, size_t length);
+void print_buffer(const uint8_t *buffer, size_t len);
+
 int main(void) {
-    char buf[BUF_SIZE];
+    char opt;
 
     int serverfd, clientfd;
-    int len;
 
-    uint32_t x, y;
-    uint32_t sum;
+    uint32_t lhs, rhs;
+    uint32_t opt_result;
 
     struct sockaddr client_addr;
     socklen_t client_len;
@@ -39,8 +41,8 @@ int main(void) {
         exit(1);
     }
 
-    char send_buffer[BUF_SIZE];
-    char recv_buffer[BUF_SIZE];
+    uint8_t send_buffer[BUF_SIZE];
+    uint8_t recv_buffer[BUF_SIZE];
     ssize_t read;
     ssize_t total_read;
 
@@ -48,24 +50,24 @@ int main(void) {
     while(1) {
         memset(&client_addr, 0, sizeof(struct sockaddr));
 
-        clientfd = accept(serverfd, &client_addr, &client_len, 0);
+        printf("waiting for client connection\n");
+
+        clientfd = accept(serverfd, &client_addr, &client_len);
 
         if (clientfd == -1) {
             perror("[calc_server]: failed to accept client");
             continue;
         }
 
+        printf("accpeted client. checking for data\n");
+
         read = 0;
         total_read = 0;
 
         // Now process the client
         while(1) {
-            x = 0;
-            y = 0;
-            sum = 0;
-
             // Receive two uint32_t values into a buffer (buf)
-            read = recv(clientfd, recv_buffer, BUF_SIZE);
+            read = recv(clientfd, recv_buffer, BUF_SIZE, 0);
 
             if (read <= 0) {
                 if (read == -1) {
@@ -78,17 +80,65 @@ int main(void) {
 
             total_read += read;
 
-            if (total_read ==
+            if (read > 9) {
+                printf("too many bytes received from client\n");
+                break;
+            }
+
+            printf("received calc from client\n");
+
+            print_buffer(recv_buffer, read);
+
             // Copy the values out of the buffer into variables (x and y)
+            lhs = ((uint32_t)(recv_buffer[0] << 24)) |
+                ((uint32_t)(recv_buffer[1] << 16)) |
+                ((uint32_t)(recv_buffer[2] << 8)) |
+                ((uint32_t)(recv_buffer[3]));
+
+            opt = (char)(recv_buffer[4]);
+
+            rhs = ((uint32_t)(recv_buffer[5] << 24)) |
+                ((uint32_t)(recv_buffer[6] << 16)) |
+                ((uint32_t)(recv_buffer[7] << 8)) |
+                ((uint32_t)(recv_buffer[8]));
 
             // Add the numbers (into sum)
+            switch (opt) {
+            case '+':
+                printf("adding requested numbers %d + %d\n", lhs, rhs);
+                opt_result = lhs + rhs;
+                break;
+            default:
+                printf("unknown opt from client\n");
+                opt_result = 0;
+                break;
+            }
+
+            printf("sending result: %d\n", opt_result);
 
             // Copy the sum back to the buffer (buf)
+            send_buffer[0] = (uint8_t)((opt_result & 0xff000000) >> 24);
+            send_buffer[1] = (uint8_t)((opt_result & 0x00ff0000) >> 16);
+            send_buffer[2] = (uint8_t)((opt_result & 0x0000ff00) >> 8);
+            send_buffer[3] = (uint8_t)(opt_result & 0x000000ff);
+
+            print_buffer(send_buffer, 4);
 
             // Send the buffer back to the client. Only send the bytes for the sum!
 
+            if (send_bytes(clientfd, send_buffer, 4) == -1) {
+                perror("failed sending data to client");
+                break;
+            }
         }
 
+        if (shutdown(clientfd, SHUT_RDWR) != 0) {
+            perror("failed to shutdown client socket");
+        }
+
+        close(clientfd);
+
+        printf("total bytes read from client: %ld\n", total_read);
     }
 
     close(serverfd);
@@ -121,11 +171,11 @@ int bind_and_listen(const char *service) {
             continue;
         }
 
-        if (!bind(s, rp->ai_addr, rp->ai_addrlen)) {
+        if (!bind(sockfd, rp->ai_addr, rp->ai_addrlen)) {
             break;
         }
 
-        close(s);
+        close(sockfd);
     }
 
     if (rp == NULL) {
@@ -133,13 +183,41 @@ int bind_and_listen(const char *service) {
         return -1;
     }
 
-    if (listen(s, MAX_PENDING) == -1) {
+    if (listen(sockfd, MAX_PENDING) == -1) {
         perror("stream-talk-server: listen");
-        close(s);
+        close(sockfd);
         return -1;
     }
 
     freeaddrinfo(result);
 
-    return s;
+    return sockfd;
+}
+
+int send_bytes(int sockfd, uint8_t *bytes, size_t length) {
+    ssize_t sent;
+    uint8_t *p = bytes;
+
+    while (length > 0) {
+        sent = send(sockfd, bytes, length, 0);
+
+        if (sent <= 0) {
+            return -1;
+        }
+
+        *p += sent;
+        length -= sent;
+    }
+
+    return 0;
+}
+
+void print_buffer(const uint8_t *buffer, size_t len) {
+    printf("[%ld]:", len);
+
+    for (ssize_t i = 0; i < len; ++i) {
+        printf(" %02x", buffer[i]);
+    }
+
+    printf("\n%s\n", buffer);
 }
