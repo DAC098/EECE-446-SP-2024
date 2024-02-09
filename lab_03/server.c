@@ -1,6 +1,3 @@
-/* This code is an updated version of the sample code from "Computer Networks: A Systems
- * Approach," 5th Edition by Larry L. Peterson and Bruce S. Davis. Some code comes from
- * man pages, mostly getaddrinfo(3). */
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -10,10 +7,10 @@
 #include <unistd.h>
 
 #define SERVER_PORT "5432"
-#define BUF_SIZE 256 // This can be smaller. What size?
+#define BUF_SIZE 256
 #define MAX_PENDING 5
 
-/*
+/**
  * Create, bind and passive open a socket on a local interface for the provided service.
  * Argument matches the second argument to getaddrinfo(3).
  *
@@ -22,7 +19,16 @@
  */
 int bind_and_listen(const char *service);
 
+/**
+ * send a buffer in its entirety to the given socket
+ *
+ * returns the result of the send operation. will return on first error
+ */
 int send_bytes(int sockfd, uint8_t *bytes, size_t length);
+
+/**
+ * prints the given buffer to stdout
+ */
 void print_buffer(const uint8_t *buffer, size_t len);
 
 int main(void) {
@@ -36,7 +42,6 @@ int main(void) {
     struct sockaddr client_addr;
     socklen_t client_len;
 
-    /* Bind socket to local interface and passive open */
     if ((serverfd = bind_and_listen(SERVER_PORT)) < 0) {
         exit(1);
     }
@@ -46,50 +51,60 @@ int main(void) {
     ssize_t read;
     ssize_t total_read;
 
-    // Accept a connection from the client
-    while(1) {
+    while (1) {
         memset(&client_addr, 0, sizeof(struct sockaddr));
 
         printf("waiting for client connection\n");
 
+        // wait for a connection to the server. we will only handle one client
+        // at a time
         clientfd = accept(serverfd, &client_addr, &client_len);
 
         if (clientfd == -1) {
-            perror("[calc_server]: failed to accept client");
+            perror("[server] failed to accept client");
             continue;
         }
 
         printf("accpeted client. checking for data\n");
 
-        read = 0;
-        total_read = 0;
+        while (1) {
+            total_read = 0;
 
-        // Now process the client
-        while(1) {
-            // Receive two uint32_t values into a buffer (buf)
-            read = recv(clientfd, recv_buffer, BUF_SIZE, 0);
+            while (total_read < 9) {
+                // Receive two uint32_t values into a buffer (buf)
+                read = recv(clientfd, recv_buffer, BUF_SIZE, 0);
 
-            if (read <= 0) {
-                if (read == -1) {
-                    perror("error reading data from client");
-                    continue;
+                if (read <= 0) {
+                    if (read == -1) {
+                        perror("[server] error reading data from client");
+                    }
+
+                    break;
                 }
 
+                total_read += read;
+            }
+
+            // the client did not send enough data so break out and close the
+            // client
+            if (total_read < 9) {
+                printf("not enough bytes received from client\n");
                 break;
             }
 
-            total_read += read;
-
-            if (read > 9) {
+            // the client has sent too many bytes so break out and close the
+            // client
+            if (total_read > 9) {
                 printf("too many bytes received from client\n");
                 break;
             }
 
             printf("received calc from client\n");
 
-            print_buffer(recv_buffer, read);
+            print_buffer(recv_buffer, total_read);
 
-            // Copy the values out of the buffer into variables (x and y)
+            // we will manually fill the buffer by taking the unsigned 32 bit
+            // int and placing each byte into the buffer in big-endian order
             lhs = ((uint32_t)(recv_buffer[0] << 24)) |
                 ((uint32_t)(recv_buffer[1] << 16)) |
                 ((uint32_t)(recv_buffer[2] << 8)) |
@@ -102,11 +117,11 @@ int main(void) {
                 ((uint32_t)(recv_buffer[7] << 8)) |
                 ((uint32_t)(recv_buffer[8]));
 
-            // Add the numbers (into sum)
+            // perform the given operation by the client. currently only sum
             switch (opt) {
             case '+':
-                printf("adding requested numbers %d + %d\n", lhs, rhs);
                 opt_result = lhs + rhs;
+                printf("adding requested numbers %u + %u = %u\n", lhs, rhs, opt_result);
                 break;
             default:
                 printf("unknown opt from client\n");
@@ -114,26 +129,24 @@ int main(void) {
                 break;
             }
 
-            printf("sending result: %d\n", opt_result);
-
-            // Copy the sum back to the buffer (buf)
+            // place the result of the opt into the buffer manually
             send_buffer[0] = (uint8_t)((opt_result & 0xff000000) >> 24);
             send_buffer[1] = (uint8_t)((opt_result & 0x00ff0000) >> 16);
             send_buffer[2] = (uint8_t)((opt_result & 0x0000ff00) >> 8);
-            send_buffer[3] = (uint8_t)(opt_result & 0x000000ff);
+            send_buffer[3] = (uint8_t)( opt_result & 0x000000ff);
 
+            printf("sending results\n");
             print_buffer(send_buffer, 4);
 
-            // Send the buffer back to the client. Only send the bytes for the sum!
-
+            // send back the result of the opt
             if (send_bytes(clientfd, send_buffer, 4) == -1) {
-                perror("failed sending data to client");
+                perror("[server] failed sending data to client");
                 break;
             }
         }
 
         if (shutdown(clientfd, SHUT_RDWR) != 0) {
-            perror("failed to shutdown client socket");
+            perror("[server] failed to shutdown client socket");
         }
 
         close(clientfd);
@@ -142,7 +155,6 @@ int main(void) {
     }
 
     close(serverfd);
-    // Close any other sockets you use.
 
     return 0;
 }
@@ -154,14 +166,14 @@ int bind_and_listen(const char *service) {
 
     /* Build address data structure */
     memset(&hints, 0, sizeof(struct addrinfo));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET6;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
     hints.ai_protocol = 0;
 
     /* Get local address info */
     if ((sockfd = getaddrinfo(NULL, service, &hints, &result)) != 0) {
-        fprintf(stderr, "stream-talk-server: getaddrinfo: %s\n", gai_strerror(sockfd));
+        fprintf(stderr, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(sockfd));
         return -1;
     }
 
@@ -179,12 +191,13 @@ int bind_and_listen(const char *service) {
     }
 
     if (rp == NULL) {
-        perror( "stream-talk-server: bind" );
+        perror("[server] bind_and_listen: bind" );
         return -1;
     }
 
     if (listen(sockfd, MAX_PENDING) == -1) {
-        perror("stream-talk-server: listen");
+        perror("[server] bind_and_listen: listen");
+
         close(sockfd);
         return -1;
     }
@@ -219,5 +232,5 @@ void print_buffer(const uint8_t *buffer, size_t len) {
         printf(" %02x", buffer[i]);
     }
 
-    printf("\n%s\n", buffer);
+    printf("\n");
 }

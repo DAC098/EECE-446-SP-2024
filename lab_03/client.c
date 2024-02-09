@@ -1,6 +1,3 @@
-/* This code is an updated version of the sample code from "Computer Networks: A Systems
- * Approach," 5th Edition by Larry L. Peterson and Bruce S. Davis. Some code comes from
- * man pages, mostly getaddrinfo(3). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -9,10 +6,9 @@
 #include <string.h>
 #include <unistd.h>
 
-#define SERVER_PORT "5432" // This must match on client and server
-#define BUF_SIZE 256 // This can be smaller. What size?
+#define BUF_SIZE 256
 
-/*
+/**
  * Lookup a host IP address and connect to it using service. Arguments match the first two
  * arguments to getaddrinfo(3).
  *
@@ -21,100 +17,117 @@
  */
 int lookup_and_connect(const char *host, const char *service);
 
+/**
+ * send a buffer in its entirety to the given socket
+ *
+ * returns the result of the send operation. will return on first error
+ */
 int send_bytes(int sockfd, uint8_t *bytes, size_t length);
+
+/**
+ * prints the given buffer to stdout
+ */
 void print_buffer(const uint8_t *buffer, size_t len);
 
+/**
+ * clears the contents of stdin
+ */
+void clear_stdin();
+
 int main(int argc, char *argv[]) {
-    char *host;
-    uint8_t send_buf[BUF_SIZE];
-    uint8_t recv_buf[BUF_SIZE];
+    char *host = "::";
+    char *port = "5432";
+
+    uint8_t send_buffer[BUF_SIZE];
+    uint8_t recv_buffer[BUF_SIZE];
 
     int sockfd;
     int check;
 
-    uint32_t a, b;
-    uint32_t answer;
+    uint32_t lhs, rhs;
+    uint32_t server_result;
 
     ssize_t read;
     ssize_t total_read = 0;
 
     if (argc == 2) {
         host = argv[1];
-    } else {
-        fprintf(stderr, "usage: %s host\n", argv[0]);
-        exit(1);
     }
 
-    /* Lookup IP and connect to server */
-    if ((sockfd = lookup_and_connect(host, SERVER_PORT)) < 0) {
+    if ((sockfd = lookup_and_connect(host, port)) < 0) {
         exit(1);
     }
 
     while(1) {
-        memset(send_buf, 0, BUF_SIZE);
-        memset(recv_buf, 0, BUF_SIZE);
+        memset(send_buffer, 0, BUF_SIZE);
+        memset(recv_buffer, 0, BUF_SIZE);
         total_read = 0;
 
-        // Get two numbers (a and b) from the user
-        printf("a: ");
-        check = scanf("%d", &a);
+        // request lhs value from user
+        printf("lhs: ");
+        check = scanf("%u", &lhs);
 
         if (check == 0 || check == EOF) {
+            clear_stdin();
+
             if (check == 0) {
-                printf("invalid a value provided");
+                printf("invalid lhs value provided\n");
                 continue;
             } else {
-                perror("error reading input");
+                perror("[client] error reading input");
                 continue;
             }
         }
 
-        printf("a value: %d\n", a);
-
-        printf("b: ");
-        check = scanf("%d", &b);
+        // request rhs value from user
+        printf("rhs: ");
+        check = scanf("%u", &rhs);
 
         if (check == 0 || check == EOF) {
+            clear_stdin();
+
             if (check == 0) {
-                printf("invalid a value provided");
+                printf("invalid rhs value provided\n");
                 continue;
             } else {
-                perror("error reading input");
+                perror("[client] error reading input");
                 continue;
             }
         }
 
-        printf("b value: %d\n", b);
+        // we will manually fill the buffer by taking the unsigned 32 bit int
+        // and placing each byte into the buffer in big-endian order
+        send_buffer[0] = (uint8_t)((lhs & 0xff000000) >> 24);
+        send_buffer[1] = (uint8_t)((lhs & 0x00ff0000) >> 16);
+        send_buffer[2] = (uint8_t)((lhs & 0x0000ff00) >>  8);
+        send_buffer[3] = (uint8_t)( lhs & 0x000000ff);
 
-        // Copy the numbers into a buffer (buf)
-        send_buf[0] = (uint8_t)((a & 0xff000000) >> 24);
-        send_buf[1] = (uint8_t)((a & 0x00ff0000) >> 16);
-        send_buf[2] = (uint8_t)((a & 0x0000ff00) >>  8);
-        send_buf[3] = (uint8_t)( a & 0x000000ff);
+        send_buffer[4] = (uint8_t)'+';
 
-        send_buf[4] = (uint8_t)'+';
-
-        send_buf[5] = (uint8_t)((b & 0xff000000) >> 24);
-        send_buf[6] = (uint8_t)((b & 0x00ff0000) >> 16);
-        send_buf[7] = (uint8_t)((b & 0x0000ff00) >> 8);
-        send_buf[8] = (uint8_t)( b & 0x000000ff);
+        send_buffer[5] = (uint8_t)((rhs & 0xff000000) >> 24);
+        send_buffer[6] = (uint8_t)((rhs & 0x00ff0000) >> 16);
+        send_buffer[7] = (uint8_t)((rhs & 0x0000ff00) >> 8);
+        send_buffer[8] = (uint8_t)( rhs & 0x000000ff);
 
         printf("sending buffer\n");
-        print_buffer(send_buf, 9);
+        print_buffer(send_buffer, 9);
 
-        // Send the buffer to the server using the connected socket. Only send the bytes for a and b!
-        if (send_bytes(sockfd, send_buf, 9) == -1) {
-            perror("failed to send data to server");
+        // send the contents of the buffer to the server. since we only wrote 9
+        // bytes to the buffer we will inform the send operation that the
+        // buffer is that long even though the buffer size could be larger
+        if (send_bytes(sockfd, send_buffer, 9) == -1) {
+            perror("[client] failed to send data to server");
             continue;
         }
 
-        // Receive the sum from the server into a buffer
+        // wait for data from server, if the amount is less than 4 then we will
+        // wait to read more
         while (total_read < 4) {
-            read = recv(sockfd, recv_buf, BUF_SIZE, 0);
+            read = recv(sockfd, recv_buffer, BUF_SIZE, 0);
 
             if (read <= 0) {
                 if (read == -1) {
-                    perror("error reading data from remote host");
+                    perror("[client] error reading data from remote host");
                     break;
                 }
             }
@@ -122,22 +135,24 @@ int main(int argc, char *argv[]) {
             total_read += read;
         }
 
+        // since we are only expecting 4 bytes from the server we will expect
+        // only that amount
         if (total_read != 4) {
-            printf("failed to receive the expected amount of bytes\n");
+            fprintf(stderr, "[client] failed to receive the expected amount of bytes\n");
             continue;
         }
 
-        printf("received data\n");
-        print_buffer(recv_buf, 4);
+        printf("received buffer\n");
+        print_buffer(recv_buffer, 4);
 
-        // Copy the sum out of the buffer into a variable (answer)
-        answer = ((uint32_t)(recv_buf[0] << 24)) |
-            ((uint32_t)(recv_buf[1] << 16)) |
-            ((uint32_t)(recv_buf[2] << 8)) |
-            ((uint32_t)(recv_buf[3]));
+        // Copy the sum out of the buffer into a variable (server_result)
+        server_result = ((uint32_t)(recv_buffer[0] << 24)) |
+            ((uint32_t)(recv_buffer[1] << 16)) |
+            ((uint32_t)(recv_buffer[2] << 8)) |
+            ((uint32_t)(recv_buffer[3]));
 
         // Print the sum
-        printf("%d\n", answer);
+        printf("%u + %u = %u\n", lhs, rhs, server_result);
     }
 
     close(sockfd);
@@ -158,7 +173,7 @@ int lookup_and_connect(const char *host, const char *service) {
     hints.ai_protocol = 0;
 
     if ((sockfd = getaddrinfo(host, service, &hints, &result)) != 0) {
-        fprintf(stderr, "[calc_client] lookup_and_connect: getaddrinfo: %s\n", gai_strerror(sockfd));
+        fprintf(stderr, "[client] lookup_and_connect: getaddrinfo: %s\n", gai_strerror(sockfd));
         return -1;
     }
 
@@ -176,7 +191,7 @@ int lookup_and_connect(const char *host, const char *service) {
     }
 
     if (rp == NULL) {
-        perror("[calc_client] lookup_and_connect: connect");
+        perror("[client] lookup_and_connect: connect");
         return -1;
     }
 
@@ -210,5 +225,11 @@ void print_buffer(const uint8_t *buffer, size_t len) {
         printf(" %02x", buffer[i]);
     }
 
-    printf("\n%s\n", buffer);
+    printf("\n");
+}
+
+void clear_stdin() {
+    int c;
+
+    while((c = getchar()) != '\n' && c != EOF) {}
 }
