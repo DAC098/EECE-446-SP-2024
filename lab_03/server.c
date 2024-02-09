@@ -37,7 +37,7 @@ int main(void) {
     int serverfd, clientfd;
 
     uint32_t lhs, rhs;
-    uint32_t opt_result;
+    uint64_t opt_result;
 
     struct sockaddr client_addr;
     socklen_t client_len;
@@ -50,6 +50,7 @@ int main(void) {
     uint8_t recv_buffer[BUF_SIZE];
     ssize_t read;
     ssize_t total_read;
+    ssize_t session_read;
 
     while (1) {
         memset(&client_addr, 0, sizeof(struct sockaddr));
@@ -99,7 +100,9 @@ int main(void) {
                 break;
             }
 
-            printf("received calc from client\n");
+            session_read += total_read;
+
+            printf("received buffer\n");
 
             print_buffer(recv_buffer, total_read);
 
@@ -121,7 +124,7 @@ int main(void) {
             switch (opt) {
             case '+':
                 opt_result = lhs + rhs;
-                printf("adding requested numbers %u + %u = %u\n", lhs, rhs, opt_result);
+                printf("adding requested numbers %u + %u = %lu\n", lhs, rhs, opt_result);
                 break;
             default:
                 printf("unknown opt from client\n");
@@ -130,16 +133,20 @@ int main(void) {
             }
 
             // place the result of the opt into the buffer manually
-            send_buffer[0] = (uint8_t)((opt_result & 0xff000000) >> 24);
-            send_buffer[1] = (uint8_t)((opt_result & 0x00ff0000) >> 16);
-            send_buffer[2] = (uint8_t)((opt_result & 0x0000ff00) >> 8);
-            send_buffer[3] = (uint8_t)( opt_result & 0x000000ff);
+            send_buffer[0] = (uint8_t)((opt_result & 0xff00000000000000) >> 56);
+            send_buffer[1] = (uint8_t)((opt_result & 0x00ff000000000000) >> 48);
+            send_buffer[2] = (uint8_t)((opt_result & 0x0000ff0000000000) >> 40);
+            send_buffer[3] = (uint8_t)((opt_result & 0x000000ff00000000) >> 32);
+            send_buffer[4] = (uint8_t)((opt_result & 0x00000000ff000000) >> 24);
+            send_buffer[5] = (uint8_t)((opt_result & 0x0000000000ff0000) >> 16);
+            send_buffer[6] = (uint8_t)((opt_result & 0x000000000000ff00) >> 8);
+            send_buffer[7] = (uint8_t)( opt_result & 0x00000000000000ff);
 
-            printf("sending results\n");
-            print_buffer(send_buffer, 4);
+            printf("sending buffer\n");
+            print_buffer(send_buffer, 8);
 
             // send back the result of the opt
-            if (send_bytes(clientfd, send_buffer, 4) == -1) {
+            if (send_bytes(clientfd, send_buffer, 8) == -1) {
                 perror("[server] failed sending data to client");
                 break;
             }
@@ -151,7 +158,7 @@ int main(void) {
 
         close(clientfd);
 
-        printf("total bytes read from client: %ld\n", total_read);
+        printf("total bytes read from client: %lu\n", session_read);
     }
 
     close(serverfd);
@@ -164,20 +171,20 @@ int bind_and_listen(const char *service) {
     struct addrinfo *rp, *result;
     int sockfd;
 
-    /* Build address data structure */
+    // build address data structure
     memset(&hints, 0, sizeof(struct addrinfo));
     hints.ai_family = AF_INET6;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
     hints.ai_protocol = 0;
 
-    /* Get local address info */
+    // get local address info
     if ((sockfd = getaddrinfo(NULL, service, &hints, &result)) != 0) {
         fprintf(stderr, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(sockfd));
         return -1;
     }
 
-    /* Iterate through the address list and try to perform passive open */
+    // iterate through the address list and try to perform passive open
     for (rp = result; rp != NULL; rp = rp->ai_next) {
         if ((sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol)) == -1 ) {
             continue;
@@ -226,7 +233,7 @@ int send_bytes(int sockfd, uint8_t *bytes, size_t length) {
 }
 
 void print_buffer(const uint8_t *buffer, size_t len) {
-    printf("[%ld]:", len);
+    printf("[%lu]:", len);
 
     for (ssize_t i = 0; i < len; ++i) {
         printf(" %02x", buffer[i]);

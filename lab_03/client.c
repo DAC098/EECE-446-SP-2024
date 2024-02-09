@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
     int check;
 
     uint32_t lhs, rhs;
-    uint32_t server_result;
+    uint64_t server_result;
 
     ssize_t read;
     ssize_t total_read = 0;
@@ -122,7 +122,7 @@ int main(int argc, char *argv[]) {
 
         // wait for data from server, if the amount is less than 4 then we will
         // wait to read more
-        while (total_read < 4) {
+        while (total_read < 8) {
             read = recv(sockfd, recv_buffer, BUF_SIZE, 0);
 
             if (read <= 0) {
@@ -137,22 +137,26 @@ int main(int argc, char *argv[]) {
 
         // since we are only expecting 4 bytes from the server we will expect
         // only that amount
-        if (total_read != 4) {
+        if (total_read != 8) {
             fprintf(stderr, "[client] failed to receive the expected amount of bytes\n");
             continue;
         }
 
         printf("received buffer\n");
-        print_buffer(recv_buffer, 4);
+        print_buffer(recv_buffer, 8);
 
         // Copy the sum out of the buffer into a variable (server_result)
-        server_result = ((uint32_t)(recv_buffer[0] << 24)) |
-            ((uint32_t)(recv_buffer[1] << 16)) |
-            ((uint32_t)(recv_buffer[2] << 8)) |
-            ((uint32_t)(recv_buffer[3]));
+        server_result = ((uint64_t)(recv_buffer[0]) << 56) |
+            ((uint64_t)(recv_buffer[1]) << 48) |
+            ((uint64_t)(recv_buffer[2]) << 40) |
+            ((uint64_t)(recv_buffer[3]) << 32) |
+            ((uint64_t)(recv_buffer[4]) << 24) |
+            ((uint64_t)(recv_buffer[5]) << 16) |
+            ((uint64_t)(recv_buffer[6]) << 8) |
+            ((uint64_t)(recv_buffer[7]));
 
         // Print the sum
-        printf("%u + %u = %u\n", lhs, rhs, server_result);
+        printf("%u + %u = %lu\n", lhs, rhs, server_result);
     }
 
     close(sockfd);
@@ -219,7 +223,7 @@ int send_bytes(int sockfd, uint8_t *bytes, size_t length) {
 }
 
 void print_buffer(const uint8_t *buffer, size_t len) {
-    printf("[%ld]:", len);
+    printf("[%lu]:", len);
 
     for (ssize_t i = 0; i < len; ++i) {
         printf(" %02x", buffer[i]);
