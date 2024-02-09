@@ -50,7 +50,7 @@ int main(void) {
     uint8_t recv_buffer[BUF_SIZE];
     ssize_t read;
     ssize_t total_read;
-    ssize_t session_read;
+    ssize_t session_read = 0;
 
     while (1) {
         memset(&client_addr, 0, sizeof(struct sockaddr));
@@ -123,7 +123,7 @@ int main(void) {
             // perform the given operation by the client. currently only sum
             switch (opt) {
             case '+':
-                opt_result = lhs + rhs;
+                opt_result = (uint64_t)lhs + (uint64_t)rhs;
                 printf("adding requested numbers %u + %u = %lu\n", lhs, rhs, opt_result);
                 break;
             default:
