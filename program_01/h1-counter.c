@@ -11,21 +11,46 @@
 #include <limits.h>
 #include <errno.h>
 
+/**
+ * attempts to send the entire contents of a given buffer
+ */
 int send_bytes(int sockfd, char *bytes, size_t length);
 
+/**
+ * prints the contents of the given addrinfo struct
+ */
 void print_addrinfo(struct addrinfo *rp);
+
+/**
+ * prints the contents of a given buffer
+ */
 void print_buffer(const char *buffer, size_t len);
 
+/**
+ * binds the client socket to a specified interface and port
+ */
 int bind_socket(int *s, int af_family, const char *l_ip, const char *l_port);
+
+/**
+ * attempts to connect to the specified remote host.
+ * can also provide a local interface and port if a specific interface is
+ * required.
+ */
 int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char *r_host, const char *r_port);
 
 int main(int argc, char **argv) {
+    // default local_port can be any available port
     char *local_port = "0";
+    // default remote_port for http
     char *remote_port = "80";
+    // default local_ip is unspecified
     char *local_ip = NULL;
+    // default remote_host
     char *remote_host = "www.ecst.csuchico.edu";
     size_t buffer_size = 2048;
 
+    // named options that the program will accept. each argument requires a
+    // value following it. no short hand names
     static struct option long_options[] = {
         {"local-ip", required_argument, 0, 0},
         {"local-port", required_argument, 0, 0},
@@ -70,6 +95,7 @@ int main(int argc, char **argv) {
                 }
 
                 buffer_size = check;
+                break;
             default:
                 printf("unknown argument given?");
                 break;
@@ -92,9 +118,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // since http 1.0 accepts text based requests we don't have to do anything
+    // else
     char request[]  = "GET /~kkredo/file.html HTTP/1.0\r\n\r\n";
     size_t length = strlen(request);
 
+    // send the request to the remote server
     if (send_bytes(sockfd, request, length) == -1) {
         perror("failed sending bytes to remote host");
 
@@ -182,33 +211,38 @@ void print_buffer(const char *buffer, size_t len) {
         printf(" %#x", buffer[i]);
     }
 
-    printf("\n");
-
-    printf("%s\n", buffer);
+    printf("\n%s\n", buffer);
 }
 
 void print_addrinfo(struct addrinfo *rp) {
+    // ipv4 address string will fill inside an ipv6 address string
     char addr_str[INET6_ADDRSTRLEN];
 
     if (rp->ai_family == AF_INET) {
+        // cast the ai_addr to the sockaddr_in struct
         struct sockaddr_in *v4 = (struct sockaddr_in *)rp->ai_addr;
 
+        // attempt to retrieve the string version of the ipv4 address
         if (inet_ntop(rp->ai_family, &(v4->sin_addr), addr_str, INET6_ADDRSTRLEN) == NULL) {
-            perror("inet_ntop: failed parsing addr");
+            perror("[h1-counter]: print_addrinfo: inet_ntop: failed parsing addr");
             return;
         }
 
         printf("%s:%d", addr_str, v4->sin_port);
     } else if (rp->ai_family == AF_INET6) {
+        // cast the ai_addr to the sockaddr_in6 struct
         struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)rp->ai_addr;
 
+        // attempt to retrieve the string version of the ipv6 address
         if (inet_ntop(rp->ai_family, &(v6->sin6_addr), addr_str, INET6_ADDRSTRLEN) == NULL) {
-            perror("inet_ntop: failed parsing addr");
+            perror("[h1-counter]: print_addrinfo: inet_ntop: failed parsing addr");
             return;
         }
 
         printf("%s:%d", addr_str, v6->sin6_port);
     } else {
+        // the ai_family is not something that is recognized by the function
+        // so just print some small stuff
         printf("family: %d | socktype: %d | protocol: %d", rp->ai_family, rp->ai_socktype, rp->ai_protocol);
     }
 }
@@ -220,6 +254,7 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = af_family;
     hints.ai_socktype = SOCK_STREAM;
+    // some of these flags may not be what I think, just tring them
     hints.ai_flags = AI_NUMERICHOST | AI_PASSIVE | AI_V4MAPPED;
     hints.ai_protocol = 0;
     hints.ai_canonname = NULL;
@@ -231,7 +266,7 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
     s = getaddrinfo(l_ip, l_port, &hints, &result);
 
     if (s != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+        fprintf(stderr, "[h1-counter]: bind_socket: getaddrinfo: %s\n", gai_strerror(s));
         return -1;
     }
 
@@ -243,7 +278,7 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
         printf("\n");
 
         if ((*sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol)) == -1) {
-            perror("-- failed to create socket");
+            perror("[h1-counter]: bind_socket: socket: failed to create socket");
             continue;
         }
 
@@ -253,7 +288,7 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
             return 0;
         }
 
-        perror("-- failed binding port");
+        perror("[h1-counter]: bind_socket: bind: failed binding port");
     }
 
     freeaddrinfo(result);
@@ -287,7 +322,7 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
     s = getaddrinfo(r_host, r_port, &hints, &result);
 
     if (s != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+        fprintf(stderr, "[h1-counter]: connect_socket: getaddrinfo: %s\n", gai_strerror(s));
         return -1;
     }
 
@@ -308,7 +343,7 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
             return 0;
         }
 
-        perror("-- failed connecting to remote address");
+        perror("[h1-counter]: connect_socket: connect: failed connecting to remote address");
 
         close(*sockfd);
     }
