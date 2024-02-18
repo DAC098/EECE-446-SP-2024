@@ -19,7 +19,7 @@ int send_bytes(int sockfd, char *bytes, size_t length);
 /**
  * prints the contents of the given addrinfo struct
  */
-void print_addrinfo(struct addrinfo *rp);
+void print_addrinfo(struct addrinfo *rp, int include_port);
 
 /**
  * prints the contents of a given buffer
@@ -29,42 +29,49 @@ void print_buffer(const char *buffer, size_t len);
 /**
  * binds the client socket to a specified interface and port
  */
-int bind_socket(int *s, int af_family, const char *l_ip, const char *l_port);
+int bind_socket(int *s, int af_family, const char *l_ip, int verbose);
 
 /**
  * attempts to connect to the specified remote host.
  * can also provide a local interface and port if a specific interface is
  * required.
  */
-int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char *r_host, const char *r_port);
+int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char *r_port, int verbose);
+
+/**
+ * parses a given string as an unsigned long
+ */
+int parse_ul(char *str, unsigned long *value);
 
 int main(int argc, char **argv) {
-    // default local_port can be any available port
-    char *local_port = "0";
+    int verbose = 0;
+    int fill_buffer = 0;
+
+    size_t buffer_size = 2048;
+
     // default remote_port for http
     char *remote_port = "80";
     // default local_ip is unspecified
     char *local_ip = NULL;
     // default remote_host
     char *remote_host = "www.ecst.csuchico.edu";
-    size_t buffer_size = 2048;
 
     // named options that the program will accept. each argument requires a
     // value following it. no short hand names
     static struct option long_options[] = {
         {"local-ip", required_argument, 0, 0},
-        {"local-port", required_argument, 0, 0},
         {"remote-host", required_argument, 0, 0},
         {"remote-port", required_argument, 0, 0},
         {"buffer-size", required_argument, 0 ,0},
+        {"verbose", no_argument, 0, 0},
+        {"fill-buffer", no_argument, 0, 0},
         {0, 0, 0, 0}
     };
 
     int c;
+    int option_index = 0;
 
     while (1) {
-        int option_index = 0;
-
         c = getopt_long(argc, argv, "", long_options, &option_index);
 
         if (c == -1) {
@@ -78,31 +85,36 @@ int main(int argc, char **argv) {
                 local_ip = optarg;
                 break;
             case 1:
-                local_port = optarg;
-                break;
-            case 2:
                 remote_host = optarg;
                 break;
-            case 3:
+            case 2:
                 remote_port = optarg;
                 break;
-            case 4:
-                size_t check = strtoul(optarg, NULL, 0);
-
-                if (check == ULONG_MAX && errno == ERANGE) {
-                    fprintf(stderr, "invalid buffer-size value\n");
+            case 3:
+                if (parse_ul(optarg, &buffer_size) != 0) {
                     return 1;
                 }
 
-                buffer_size = check;
+                break;
+            case 4:
+                verbose = 1;
+                break;
+            case 5:
+                fill_buffer = 1;
                 break;
             default:
-                printf("unknown argument given?");
                 break;
             }
-
             break;
         default:
+            return 1;
+        }
+    }
+
+    if (optind < argc) {
+        int start = optind;
+
+        if (parse_ul(argv[start], &buffer_size) != 0) {
             return 1;
         }
     }
@@ -114,7 +126,7 @@ int main(int argc, char **argv) {
 
     int sockfd;
 
-    if (connect_socket(&sockfd, local_ip, local_port, remote_host, remote_port) == -1) {
+    if (connect_socket(&sockfd, local_ip, remote_host, remote_port, verbose) == -1) {
         return 1;
     }
 
@@ -123,45 +135,95 @@ int main(int argc, char **argv) {
     char request[]  = "GET /~kkredo/file.html HTTP/1.0\r\n\r\n";
     size_t length = strlen(request);
 
+    if (verbose) {
+        printf("sending request to remote server\n");
+    }
+
     // send the request to the remote server
     if (send_bytes(sockfd, request, length) == -1) {
-        perror("failed sending bytes to remote host");
+        perror("[h1-counter]: main: failed sending bytes to remote host");
 
         close(sockfd);
 
         return 1;
     }
 
-    size_t buffer_len = buffer_size * sizeof(char);
+    // values for tracking html tags and string reads
     size_t h1_count = 0;
     size_t index = 0;
     size_t check_read = 0;
-    ssize_t read;
-    ssize_t total_read = 0;
     char opening[] = "<h1>";
 
+    // value for tracking ingress
+    ssize_t read;
+    ssize_t fill_read;
+    ssize_t total_read = 0;
+
+    // allocate buffer from user specified length
+    size_t buffer_len = buffer_size * sizeof(char);
     char *buffer = (char*)malloc(buffer_len);
 
     while (1) {
         memset(buffer, 0, buffer_len);
 
-        read = recv(sockfd, buffer, buffer_len, 0);
+        if (fill_buffer) {
+            fill_read = 0;
 
-        if (read <= 0) {
-            if (read == -1) {
-                perror("error reading data from remote host");
+            // here we will read until the buffer is filled completely, until
+            // there was an error, or the connection is closed by the remote
+            // host
+            while (fill_read != buffer_len) {
+                read = recv(sockfd, buffer + fill_read, buffer_len - fill_read, 0);
+
+                if (read <= 0) {
+                    if (read == -1) {
+                        perror("[h1-counter]: main: error reading data from remote host");
+                    }
+
+                    goto end_main_loop;
+                }
+
+                fill_read += read;
+                total_read += read;
+
+                if (verbose) {
+                    printf("read %lu bytes from remote server\n", read);
+                }
             }
 
-            break;
+            if (verbose) {
+                printf("filled buffer with %lu\n", fill_read);
+            }
+        } else {
+            // we will only read once and what ever amount of data we get is
+            // what we will operate on
+            read = recv(sockfd, buffer, buffer_len, 0);
+
+            if (read <= 0) {
+                if (read == -1) {
+                    perror("[h1-counter]: main: error reading data from remote host");
+                }
+
+                goto end_main_loop;
+            }
+
+            if (verbose) {
+                printf("read %lu bytes from remote server\n", read);
+            }
+
+            total_read += read;
+            fill_read = read;
         }
 
-        total_read += read;
+        if (verbose) {
+            printf("checking for html tags\n");
+        }
 
-        for (index = 0; index < read; ++index) {
+        for (index = 0; index < fill_read; ++index) {
             if (buffer[index] == '<') {
                 // start checking to see if the next set of bytes is an h1
                 // opening tag
-                for (check_read = 0; check_read < 4 && index < read; ++index) {
+                for (check_read = 0; check_read < 4 && index < fill_read; ++index) {
                     if (opening[check_read] != buffer[index]) {
                         break;
                     }
@@ -178,10 +240,55 @@ int main(int argc, char **argv) {
         }
     }
 
+// the logic could be split up better so that we dont have to use goto labels
+// but for this current situation this will work out just fine since we dont
+// have to worry about anything in the main loop
+end_main_loop:
+
+    if (fill_buffer && fill_read > 0) {
+        if (verbose) {
+            printf("%lu unread bytes in buffer. checking for html tags\n", fill_read);
+        }
+
+        // the process is exactly the same as the one in the main loop
+        for (index = 0; index < fill_read; ++index) {
+            if (buffer[index] == '<') {
+                for (check_read = 0; check_read < 4 && index < fill_read; ++index) {
+                    if (opening[check_read] != buffer[index]) {
+                        break;
+                    }
+
+                    check_read += 1;
+                }
+
+                if (check_read == 4) {
+                    h1_count += 1;
+                }
+            }
+        }
+    }
+
     printf("Number of <h1> tags: %ld\nNumber of bytes: %ld\n", h1_count, total_read);
 
     free(buffer);
     close(sockfd);
+
+    return 0;
+}
+
+int parse_ul(char *str, unsigned long *value) {
+    char *endptr;
+    *value = strtoul(str, &endptr, 0);
+
+    if (*endptr != '\0') {
+        fprintf(stderr, "invalid buffer-size value: \"%s\"\n", str);
+        return -1;
+    }
+
+    if ((*value == ULONG_MAX && errno == ERANGE) || errno == EINVAL) {
+        fprintf(stderr, "invalid buffer-size value: \"%s\"\n", str);
+        return -1;
+    }
 
     return 0;
 }
@@ -214,7 +321,7 @@ void print_buffer(const char *buffer, size_t len) {
     printf("\n%s\n", buffer);
 }
 
-void print_addrinfo(struct addrinfo *rp) {
+void print_addrinfo(struct addrinfo *rp, int include_port) {
     // ipv4 address string will fill inside an ipv6 address string
     char addr_str[INET6_ADDRSTRLEN];
 
@@ -228,7 +335,11 @@ void print_addrinfo(struct addrinfo *rp) {
             return;
         }
 
-        printf("%s:%d", addr_str, v4->sin_port);
+        if (include_port != 0) {
+            printf("%s:%d", addr_str, v4->sin_port);
+        } else {
+            printf("%s", addr_str);
+        }
     } else if (rp->ai_family == AF_INET6) {
         // cast the ai_addr to the sockaddr_in6 struct
         struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)rp->ai_addr;
@@ -239,7 +350,11 @@ void print_addrinfo(struct addrinfo *rp) {
             return;
         }
 
-        printf("%s:%d", addr_str, v6->sin6_port);
+        if (include_port != 0) {
+            printf("%s:%d", addr_str, v6->sin6_port);
+        } else {
+            printf("%s", addr_str);
+        }
     } else {
         // the ai_family is not something that is recognized by the function
         // so just print some small stuff
@@ -247,7 +362,7 @@ void print_addrinfo(struct addrinfo *rp) {
     }
 }
 
-int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port) {
+int bind_socket(int *sockfd, int af_family, const char *l_ip, int verbose) {
     struct addrinfo hints;
     struct addrinfo *result, *rp;
 
@@ -255,15 +370,13 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
     hints.ai_family = af_family;
     hints.ai_socktype = SOCK_STREAM;
     // some of these flags may not be what I think, just tring them
-    hints.ai_flags = AI_NUMERICHOST | AI_PASSIVE | AI_V4MAPPED;
+    hints.ai_flags = AI_NUMERICHOST | AI_V4MAPPED;
     hints.ai_protocol = 0;
     hints.ai_canonname = NULL;
     hints.ai_addr = NULL;
     hints.ai_next = NULL;
 
-    int s;
-
-    s = getaddrinfo(l_ip, l_port, &hints, &result);
+    int s = getaddrinfo(l_ip, NULL, &hints, &result);
 
     if (s != 0) {
         fprintf(stderr, "[h1-counter]: bind_socket: getaddrinfo: %s\n", gai_strerror(s));
@@ -271,13 +384,17 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
     }
 
     for (rp = result; rp != NULL; rp = rp->ai_next) {
-        printf("binding socket ");
+        if (verbose) {
+            printf("binding socket ");
 
-        print_addrinfo(rp);
+            print_addrinfo(rp, 1);
 
-        printf("\n");
+            printf("\n");
+        }
 
-        if ((*sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol)) == -1) {
+        *sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+        if (*sockfd == -1) {
             perror("[h1-counter]: bind_socket: socket: failed to create socket");
             continue;
         }
@@ -296,14 +413,16 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, const char *l_port
     return -1;
 }
 
-int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char *r_host, const char *r_port) {
-    printf("attempting to connect with remote server %s", r_host);
+int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char *r_port, int verbose) {
+    if (verbose) {
+        printf("attempting to connect with remote server %s", r_host);
 
-    if (r_port != NULL) {
-        printf(":%s", r_port);
+        if (r_port != NULL) {
+            printf(":%s", r_port);
+        }
+
+        printf("\n");
     }
-
-    printf("\n");
 
     struct addrinfo hints;
     struct addrinfo *result, *rp;
@@ -317,9 +436,7 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
     hints.ai_addr = NULL;
     hints.ai_next = NULL;
 
-    int s;
-
-    s = getaddrinfo(r_host, r_port, &hints, &result);
+    int s = getaddrinfo(r_host, r_port, &hints, &result);
 
     if (s != 0) {
         fprintf(stderr, "[h1-counter]: connect_socket: getaddrinfo: %s\n", gai_strerror(s));
@@ -327,15 +444,26 @@ int connect_socket(int *sockfd, const char *l_ip, const char *l_port, const char
     }
 
     for (rp = result; rp != NULL; rp = rp->ai_next) {
-        if (bind_socket(sockfd, rp->ai_family, l_ip, l_port) == -1) {
-            continue;
+        if (l_ip != NULL) {
+            if (bind_socket(sockfd, rp->ai_family, l_ip, verbose) == -1) {
+                continue;
+            }
+        } else {
+            *sockfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+
+            if (*sockfd == -1) {
+                perror("[h1-counter]: connect_socket: socket: failed to create socket");
+                continue;
+            }
         }
 
-        printf("connecting ");
+        if (verbose) {
+            printf("connecting ");
 
-        print_addrinfo(rp);
+            print_addrinfo(rp, 0);
 
-        printf("\n");
+            printf("\n");
+        }
 
         if (connect(*sockfd, rp->ai_addr, rp->ai_addrlen) != -1) {
             freeaddrinfo(result);
