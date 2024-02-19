@@ -1,0 +1,18 @@
+#!/bin/bash
+
+./dl_request
+
+if (( $? != 0)); then
+    echo "dl_request failed"
+fi
+
+sed -e '/^Date/d' -i local_file
+
+md5_hash=$(md5sum local_file | awk '{print $1}')
+expected="58a667d1d3289888936f93b9e41b38d3"
+
+if [[ $md5_hash != $expected ]]; then
+    echo "md5 mismatch"
+else
+    echo "md5 match"
+fi
