@@ -14,7 +14,7 @@
 /**
  * attempts to send the entire contents of a given buffer
  */
-int send_bytes(int sockfd, char *bytes, size_t length);
+int send_bytes(int sockfd, const char *bytes, size_t length);
 
 /**
  * prints the contents of the given addrinfo struct
@@ -36,12 +36,28 @@ int bind_socket(int *s, int af_family, const char *l_ip, int verbose);
  * can also provide a local interface and port if a specific interface is
  * required.
  */
-int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char *r_port, int verbose);
+int connect_socket(
+    int *sockfd,
+    const char *l_ip,
+    const char *r_host,
+    const char *r_port,
+    int verbose
+);
 
 /**
  * parses a given string as an unsigned long
  */
 int parse_ul(char *str, unsigned long *value);
+
+/**
+ * finds the number of occurances for needle in haystack
+ */
+size_t count_occurances(
+    const char* haystack,
+    size_t haystack_len,
+    const char* needle,
+    size_t needle_len
+);
 
 int main(int argc, char **argv) {
     int verbose = 0;
@@ -92,6 +108,7 @@ int main(int argc, char **argv) {
                 break;
             case 3:
                 if (parse_ul(optarg, &buffer_size) != 0) {
+                    fprintf(stderr, "invalid buffer-size value: \"%s\"\n", optarg);
                     return 1;
                 }
 
@@ -115,6 +132,7 @@ int main(int argc, char **argv) {
         int start = optind;
 
         if (parse_ul(argv[start], &buffer_size) != 0) {
+            fprintf(stderr, "invalid buffer-size value: \"%s\"\n", argv[start]);
             return 1;
         }
     }
@@ -124,7 +142,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int sockfd;
+    int sockfd = 0;
 
     if (connect_socket(&sockfd, local_ip, remote_host, remote_port, verbose) == -1) {
         return 1;
@@ -132,15 +150,14 @@ int main(int argc, char **argv) {
 
     // since http 1.0 accepts text based requests we don't have to do anything
     // else
-    char request[]  = "GET /~kkredo/file.html HTTP/1.0\r\n\r\n";
-    size_t length = strlen(request);
+    char *request = "GET /~kkredo/file.html HTTP/1.0\r\n\r\n";
 
     if (verbose) {
         printf("sending request to remote server\n");
     }
 
     // send the request to the remote server
-    if (send_bytes(sockfd, request, length) == -1) {
+    if (send_bytes(sockfd, request, strlen(request)) == -1) {
         perror("[h1-counter]: main: failed sending bytes to remote host");
 
         close(sockfd);
@@ -149,23 +166,19 @@ int main(int argc, char **argv) {
     }
 
     // values for tracking html tags and string reads
-    size_t h1_count = 0;
-    size_t index = 0;
-    size_t check_read = 0;
-    char opening[] = "<h1>";
+    char *needle = "<h1>";
+    size_t needle_len = strlen(needle);
+    size_t needle_count = 0;
 
     // value for tracking ingress
-    ssize_t read;
-    ssize_t fill_read;
-    ssize_t total_read = 0;
+    size_t fill_read = 0;
+    size_t total_read = 0;
 
     // allocate buffer from user specified length
     size_t buffer_len = buffer_size * sizeof(char);
     char *buffer = (char*)malloc(buffer_len);
 
     while (1) {
-        memset(buffer, 0, buffer_len);
-
         if (fill_buffer) {
             fill_read = 0;
 
@@ -173,7 +186,7 @@ int main(int argc, char **argv) {
             // there was an error, or the connection is closed by the remote
             // host
             while (fill_read != buffer_len) {
-                read = recv(sockfd, buffer + fill_read, buffer_len - fill_read, 0);
+                ssize_t read = recv(sockfd, buffer + fill_read, buffer_len - fill_read, 0);
 
                 if (read <= 0) {
                     if (read == -1) {
@@ -183,21 +196,21 @@ int main(int argc, char **argv) {
                     goto end_main_loop;
                 }
 
-                fill_read += read;
-                total_read += read;
-
                 if (verbose) {
-                    printf("read %lu bytes from remote server\n", read);
+                    printf("read %ld bytes from remote server\n", read);
                 }
+
+                fill_read += (size_t)read;
+                total_read += (size_t)read;
             }
 
             if (verbose) {
-                printf("filled buffer with %lu\n", fill_read);
+                printf("filled buffer with %lu bytes\n", fill_read);
             }
         } else {
             // we will only read once and what ever amount of data we get is
             // what we will operate on
-            read = recv(sockfd, buffer, buffer_len, 0);
+            ssize_t read = recv(sockfd, buffer, buffer_len, 0);
 
             if (read <= 0) {
                 if (read == -1) {
@@ -208,36 +221,18 @@ int main(int argc, char **argv) {
             }
 
             if (verbose) {
-                printf("read %lu bytes from remote server\n", read);
+                printf("read %ld bytes from remote server\n", read);
             }
 
-            total_read += read;
-            fill_read = read;
+            total_read += (size_t)read;
+            fill_read = (size_t)read;
         }
 
         if (verbose) {
-            printf("checking for html tags\n");
+            printf("checking for needle\n");
         }
 
-        for (index = 0; index < fill_read; ++index) {
-            if (buffer[index] == '<') {
-                // start checking to see if the next set of bytes is an h1
-                // opening tag
-                for (check_read = 0; check_read < 4 && index < fill_read; ++index) {
-                    if (opening[check_read] != buffer[index]) {
-                        break;
-                    }
-
-                    check_read += 1;
-                }
-
-                // if we checked the next 4 characters then we found an opening
-                // tag
-                if (check_read == 4) {
-                    h1_count += 1;
-                }
-            }
-        }
+        needle_count += count_occurances(buffer, fill_read, needle, needle_len);
     }
 
 // the logic could be split up better so that we dont have to use goto labels
@@ -247,28 +242,13 @@ end_main_loop:
 
     if (fill_buffer && fill_read > 0) {
         if (verbose) {
-            printf("%lu unread bytes in buffer. checking for html tags\n", fill_read);
+            printf("%lu unread bytes in buffer. checking for needle\n", fill_read);
         }
 
-        // the process is exactly the same as the one in the main loop
-        for (index = 0; index < fill_read; ++index) {
-            if (buffer[index] == '<') {
-                for (check_read = 0; check_read < 4 && index < fill_read; ++index) {
-                    if (opening[check_read] != buffer[index]) {
-                        break;
-                    }
-
-                    check_read += 1;
-                }
-
-                if (check_read == 4) {
-                    h1_count += 1;
-                }
-            }
-        }
+        needle_count += count_occurances(buffer, fill_read, needle, needle_len);
     }
 
-    printf("Number of <h1> tags: %ld\nNumber of bytes: %ld\n", h1_count, total_read);
+    printf("Number of <h1> tags: %lu\nNumber of bytes: %lu\n", needle_count, total_read);
 
     free(buffer);
     close(sockfd);
@@ -276,36 +256,65 @@ end_main_loop:
     return 0;
 }
 
+size_t count_occurances(
+    const char* haystack,
+    size_t haystack_len,
+    const char* needle,
+    size_t needle_len
+) {
+    size_t count = 0;
+
+    if (needle_len == 0) {
+        return count;
+    }
+
+    for (size_t index = 0; index < haystack_len; ++index) {
+        if (haystack[index] == needle[0]) {
+            size_t check_read = 0;
+
+            for (; check_read < needle_len && index < haystack_len; ++check_read) {
+                if (needle[check_read] != haystack[index]) {
+                    break;
+                }
+
+                index += 1;
+            }
+
+            if (check_read == needle_len) {
+                count += 1;
+            }
+        }
+    }
+
+    return count;
+}
+
 int parse_ul(char *str, unsigned long *value) {
     char *endptr;
     *value = strtoul(str, &endptr, 0);
 
     if (*endptr != '\0') {
-        fprintf(stderr, "invalid buffer-size value: \"%s\"\n", str);
         return -1;
     }
 
     if ((*value == ULONG_MAX && errno == ERANGE) || errno == EINVAL) {
-        fprintf(stderr, "invalid buffer-size value: \"%s\"\n", str);
         return -1;
     }
 
     return 0;
 }
 
-int send_bytes(int sockfd, char *bytes, size_t length) {
-    ssize_t sent;
-    char *p = bytes;
+int send_bytes(int sockfd, const char *bytes, size_t length) {
+    size_t total_sent = 0;
 
-    while (length > 0) {
-        sent = send(sockfd, bytes, length, 0);
+    while (total_sent < length) {
+        ssize_t sent = send(sockfd, bytes + total_sent, length - total_sent, 0);
 
-        if (sent <= 0) {
+        if (sent < 0) {
             return -1;
         }
 
-        *p += sent;
-        length -= sent;
+        total_sent += (size_t)sent;
     }
 
     return 0;
@@ -314,7 +323,7 @@ int send_bytes(int sockfd, char *bytes, size_t length) {
 void print_buffer(const char *buffer, size_t len) {
     printf("[%ld]:", len);
 
-    for (ssize_t i = 0; i < len; ++i) {
+    for (size_t i = 0; i < len; ++i) {
         printf(" %#x", buffer[i]);
     }
 
@@ -364,7 +373,7 @@ void print_addrinfo(struct addrinfo *rp, int include_port) {
 
 int bind_socket(int *sockfd, int af_family, const char *l_ip, int verbose) {
     struct addrinfo hints;
-    struct addrinfo *result, *rp;
+    struct addrinfo *result;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = af_family;
@@ -383,7 +392,9 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, int verbose) {
         return -1;
     }
 
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
+    struct addrinfo *rp = result;
+
+    for (; rp != NULL; rp = rp->ai_next) {
         if (verbose) {
             printf("binding socket ");
 
@@ -413,7 +424,13 @@ int bind_socket(int *sockfd, int af_family, const char *l_ip, int verbose) {
     return -1;
 }
 
-int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char *r_port, int verbose) {
+int connect_socket(
+    int *sockfd,
+    const char *l_ip,
+    const char *r_host,
+    const char *r_port,
+    int verbose
+) {
     if (verbose) {
         printf("attempting to connect with remote server %s", r_host);
 
@@ -425,7 +442,7 @@ int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char
     }
 
     struct addrinfo hints;
-    struct addrinfo *result, *rp;
+    struct addrinfo *result;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -443,7 +460,9 @@ int connect_socket(int *sockfd, const char *l_ip, const char *r_host, const char
         return -1;
     }
 
-    for (rp = result; rp != NULL; rp = rp->ai_next) {
+    struct addrinfo *rp = result;
+
+    for (; rp != NULL; rp = rp->ai_next) {
         if (l_ip != NULL) {
             if (bind_socket(sockfd, rp->ai_family, l_ip, verbose) == -1) {
                 continue;
