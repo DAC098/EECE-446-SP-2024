@@ -3,6 +3,8 @@
 #include <sys/types.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
+#include <fcntl.h> 
 
 #define BUFFER_SIZE 1024
 
@@ -14,14 +16,14 @@ int main(int argc, char *argv[]) {
     }
 
 // open the input file for reading
-    int input_fd = fopen(argv[1], O_RDONLY);
+    int input_fd = open(argv[1], O_RDONLY);
     if (input_fd == -1) {
         perror("Error opening input file");
         exit(EXIT_FAILURE);
     }
 
 // open the output file for writing
-    int output_fd = fopen("upper_file", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    int output_fd = open("upper_file", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
     if (output_fd == -1) {
         perror("Error opening output file");
         exit(EXIT_FAILURE);
@@ -33,6 +35,11 @@ int main(int argc, char *argv[]) {
 
 // read from input file, convert to upper case, and write to output file
     while ((bytes_read = read(input_fd, buffer, BUFFER_SIZE)) > 0) {
+        // print the data to the screen
+        if (write(STDOUT_FILENO, buffer, bytes_read) != bytes_read) {
+            perror("Error writing to stdout");
+            exit(EXIT_FAILURE);
+        }
         // convert characters to upper case
         for (int i = 0; i < bytes_read; i++) {
             buffer[i] = toupper(buffer[i]);
@@ -41,12 +48,6 @@ int main(int argc, char *argv[]) {
         // write converted data to output file
         if (write(output_fd, buffer, bytes_read) != bytes_read) {
             perror("Error writing to output file");
-            exit(EXIT_FAILURE);
-        }
-
-        // print the converted data to the screen
-        if (write(STDOUT_FILENO, buffer, bytes_read) != bytes_read) {
-            perror("Error writing to stdout");
             exit(EXIT_FAILURE);
         }
     }
