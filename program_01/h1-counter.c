@@ -61,7 +61,7 @@ size_t count_occurances(
 
 int main(int argc, char **argv) {
     int verbose = 0;
-    int fill_buffer = 0;
+    int fill_buffer = 1;
 
     size_t buffer_size = 2048;
 
@@ -80,7 +80,7 @@ int main(int argc, char **argv) {
         {"remote-port", required_argument, 0, 0},
         {"buffer-size", required_argument, 0 ,0},
         {"verbose", no_argument, 0, 0},
-        {"fill-buffer", no_argument, 0, 0},
+        {"partial-buffer", no_argument, 0, 0},
         {0, 0, 0, 0}
     };
 
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
                 verbose = 1;
                 break;
             case 5:
-                fill_buffer = 1;
+                fill_buffer = 0;
                 break;
             default:
                 break;
