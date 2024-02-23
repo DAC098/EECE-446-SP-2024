@@ -159,6 +159,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "program_02"
+version = "0.1.0"
+dependencies = [
+ "dns-lookup",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"

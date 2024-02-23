@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "socket-server-rs",
-    "socket-client-rs"
+    "socket-client-rs", 
+    "program_02"
 ]
 
 [workspace.dependencies.anyhow]
@@ -13,3 +14,6 @@ features = ["derive"]
 
 [workspace.dependencies.socket2]
 version = "0.5"
+
+[workspace.dependencies.dns-lookup]
+version = "2.0.4"
