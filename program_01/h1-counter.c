@@ -1,3 +1,5 @@
+/* EECE-446-SP-2024 | David Cathers | Maddison Webb */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>

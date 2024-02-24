@@ -1,3 +1,4 @@
+# EECE-446-SP-2024 | David Cathers | Maddison Webb
 EXE = h1-counter
 CFLAGS = -Wall -Werror
 CC = gcc
