@@ -1,4 +1,4 @@
-/* EECE-446-SP-2024 | David Cathers | Maddison Webb */
+/* EECE-446-SP-2024 | David Cathers | Madison Webb */
 
 #include <stdio.h>
 #include <stdlib.h>
