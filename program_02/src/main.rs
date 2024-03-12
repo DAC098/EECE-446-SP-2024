@@ -222,6 +222,23 @@ fn default_remote() -> SocketAddr {
     SocketAddr::from(([0,0,0,0], DEFAULT_PORT))
 }
 
+/// prints the commands available to the client
+fn print_cmds() {
+    println!("\
+JOIN | join: the client will join the registry with the specified peer id
+
+PUBLISH | publish: the client will send a list of available ilfes in the \
+shared directory
+
+SEARCH | search: searches the registry for the specified file name. the \
+registry will return a valid ip and port address if it was found or 0 if it \
+was not found
+
+EXIT | exit | quit: closes the client
+
+help: prints this help message");
+}
+
 fn main() {
     let mut shared_dir_opt: Option<PathBuf> = None;
     let mut remote_opt = None;
@@ -366,13 +383,13 @@ fn main() {
                 send_search(&mut conn, &file_name);
             }
             "help" => {
-                println!("available commands");
+                print_cmds();
             }
-            "quit" | "EXIT" => {
+            "quit" | "exit" | "EXIT" => {
                 break;
             }
             _ => {
-                println!("unknown command provided: \"{}\"", input);
+                println!("unknown command provided: \"{}\"", command);
             }
         }
     }
