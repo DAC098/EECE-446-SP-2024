@@ -21,6 +21,7 @@ fn read_from_peer(peer: &mut TcpStream, slice: &mut [u8]) -> error::Result<usize
         .context("io error when fetching file")
 }
 
+/// sends the fetch command to the registry
 pub fn send_fetch(conn: &mut TcpStream, filename: &str) -> error::Result<()> {
     let ascii_bytes = data::ascii_bytes(filename)
         .context("filename provided contains non ASCII characters")?;
@@ -30,6 +31,8 @@ pub fn send_fetch(conn: &mut TcpStream, filename: &str) -> error::Result<()> {
     };
 
     let mut output_file = {
+        // we can create small scope with a return value. any value declared
+        // in this scope that is not the return value will be dropped.
         let mut output_path = PathBuf::new();
         output_path.push("./");
         output_path.push(&filename);
