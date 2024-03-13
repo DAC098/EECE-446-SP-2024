@@ -1,9 +1,11 @@
 [workspace]
 members = [
     "socket-server-rs",
-    "socket-client-rs", 
-    "program_02"
+    "socket-client-rs",
+    "program_02",
+    "program_03"
 ]
+resolver = "1"
 
 [workspace.dependencies.anyhow]
 version = "1"

@@ -1,4 +1,9 @@
 /target
 
 program_02/p2_registry
+
+program_03/p3_registry
+program_03/p3_peer
+
 shared_dir
+SharedFiles
