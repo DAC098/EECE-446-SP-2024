@@ -16,7 +16,7 @@
 #include <netdb.h>
 
 #define MAX_FILES 100
-#define MAX_FILENAME_LENGTH 100
+#define FILE_PATH_BUFFER_SIZE 512
 
 int sock;
 unsigned int peer_id;
@@ -47,7 +47,7 @@ void publish()
     char buffer[1200];
     int offset = 5; // Start after action and count bytes
     unsigned int fileCount = 0;
-    char filePath[256]; // Buffer for constructing file paths, adjust size as needed
+    char filePath[FILE_PATH_BUFFER_SIZE]; // Buffer for constructing file paths, adjust size as needed
 
     // Open the SharedFiles directory
     dir = opendir("./SharedFiles");
@@ -139,7 +139,7 @@ void search()
 
     // Convert network byte order to host byte order
     peerID = ntohl(peerID);
-    peerIPv4 = ntohl(peerIPv4);
+    // peerIPv4 = ntohl(peerIPv4);
     peerPort = ntohs(peerPort);
 
     // Check if file was found
