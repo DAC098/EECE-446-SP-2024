@@ -1,7 +1,7 @@
-peer_to_peer: peer_to_peer.c
-	gcc -Wall -Werror -o peer peer.c
+peer: peer.c
+	gcc -Wall -o peer peer.c
 
 clean:
-	rm -f peer_to_peer local_file
+	rm -f peer local_file
 
 .PHONY: clean
