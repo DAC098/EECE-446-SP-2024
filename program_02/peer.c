@@ -23,14 +23,12 @@ unsigned int peer_id;
 
 void join()
 {
-    // Buffer for the JOIN request: 1 byte for action + 4 bytes for Peer ID
+    // buffer for the JOIN request
     unsigned char buffer[5];
     buffer[0] = 0; // Action code for JOIN is 0
-
-    // Convert the peer ID to network byte order and copy it to the buffer
     *(unsigned int *)(buffer + 1) = htonl(peer_id);
 
-    // Send the JOIN request to the registry
+    // send the JOIN request to the registry
     if (send(sock, buffer, sizeof(buffer), 0) < 0)
     {
         perror("send failed");
@@ -45,11 +43,11 @@ void publish()
     DIR *dir;
     struct dirent *ent;
     char buffer[1200];
-    int offset = 5; // Start after action and count bytes
+    int offset = 5; // start after action and count bytes
     unsigned int fileCount = 0;
-    char filePath[FILE_PATH_BUFFER_SIZE]; // Buffer for constructing file paths, adjust size as needed
+    char filePath[FILE_PATH_BUFFER_SIZE]; // buffer for constructing file paths
 
-    // Open the SharedFiles directory
+    // open the SharedFiles directory
     dir = opendir("./SharedFiles");
     if (dir == NULL)
     {
@@ -67,14 +65,14 @@ void publish()
                 int nameLen = strlen(ent->d_name);
                 if (offset + nameLen + 1 < sizeof(buffer))
                 {
-                    strcpy(buffer + offset, ent->d_name); // Copy the file name
-                    offset += nameLen + 1;                // Move offset, account for null terminator
+                    strcpy(buffer + offset, ent->d_name); // copy the file name
+                    offset += nameLen + 1;                // move offset, accounting for null terminator
                     fileCount++;
                 }
                 else
                 {
                     fprintf(stderr, "Buffer full, some files may not be published.\n");
-                    break; // Buffer full, stop processing
+                    break; // buffer full, stop processing
                 }
             }
         }
@@ -82,8 +80,8 @@ void publish()
 
     closedir(dir);
 
-    buffer[0] = 1;                                    // Action code for PUBLISH
-    *(unsigned int *)(buffer + 1) = htonl(fileCount); // Place the file count at the beginning of the buffer, in network byte order
+    buffer[0] = 1; // action code for PUBLISH
+    *(unsigned int *)(buffer + 1) = htonl(fileCount); // place the file count at the beginning of the buffer, in network byte order
 
     // Send the PUBLISH request to the registry
     if (send(sock, buffer, offset, 0) < 0)
@@ -98,25 +96,23 @@ void publish()
 
 void search()
 {
-    char fileName[101]; // Buffer to hold file name, assuming max length is 100
+    char fileName[101]; // buffer to hold file name, assuming max length is 100
     printf("Enter a file name: \n");
-    scanf("%100s", fileName); // Read file name, ensuring not to overflow buffer
-
-    // Format: [Action = 2][File Name]\0
+    scanf("%100s", fileName); // read file name, ensuring not to overflow buffer
     char buffer[1024];
     int fileNameLength = strlen(fileName);
-    buffer[0] = 2; // Action code for SEARCH
+    buffer[0] = 2; // action code for SEARCH
     strcpy(buffer + 1, fileName);
     buffer[fileNameLength + 1] = '\0';
 
-    // Send the SEARCH request to the registry
+    // send the SEARCH request to the registry
     if (send(sock, buffer, fileNameLength + 2, 0) < 0)
     {
         perror("send");
         return;
     }
 
-    // Receive the response from the registry
+    // receive the response from the registry
     unsigned int peerID;
     unsigned int peerIPv4;
     unsigned short peerPort;
@@ -137,19 +133,18 @@ void search()
         return;
     }
 
-    // Convert network byte order to host byte order
+    // convert network byte order to host byte order
     peerID = ntohl(peerID);
-    // peerIPv4 = ntohl(peerIPv4);
     peerPort = ntohs(peerPort);
 
-    // Check if file was found
+    // check if file was found
     if (peerID == 0 && peerIPv4 == 0 && peerPort == 0)
     {
         printf("File not indexed by registry.\n");
     }
     else
     {
-        // Convert peer IPv4 address to human-readable form
+        // convert peer IPv4 address to human-readable form
         char peerIPStr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &peerIPv4, peerIPStr, INET_ADDRSTRLEN);
 
@@ -158,18 +153,18 @@ void search()
 }
 
 void close_app()
-{ // Named to avoid conflict with exit()
+{ // named to avoid conflict with exit()
     if (sock != -1)
     {
-        close(sock); // Close the network socket
+        close(sock); // close the network socket
     }
     printf("Exiting peer application.\n");
-    exit(0); // Exit the program
+    exit(0); // exit the program
 }
 
 void print_options()
 {
-    char selection[10]; // Increase if necessary to accommodate longer inputs
+    char selection[10];
     printf("\nAvailable Commands: \n");
     printf("JOIN: sends a JOIN request to the registry.\n");
     printf("PUBLISH: send a PUBLISH request to the registry.\n");
@@ -177,10 +172,10 @@ void print_options()
     printf("EXIT: close the peer application.\n\n");
 
     while (1)
-    { // Start an infinite loop
+    {
         printf("Enter a command: \n");
         if (scanf("%9s", selection) == 1)
-        { // Read up to 9 characters (+1 for '\0')
+        {
             if (strcmp(selection, "JOIN") == 0)
             {
                 join();
@@ -196,7 +191,7 @@ void print_options()
             else if (strcmp(selection, "EXIT") == 0)
             {
                 printf("Exiting peer application.\n");
-                break; // Exit the loop
+                break; // exit the loop
             }
             else
             {
@@ -207,27 +202,27 @@ void print_options()
         {
             fprintf(stderr, "Error reading input. Please try again.\n");
             while (getchar() != '\n')
-                ; // Flush stdin to remove any remaining input
+                ;
         }
     }
 }
 
 int main(int argc, char *argv[])
 {
-    // Ensure correct argument count
+    // ensure correct argument count
     if (argc != 4)
     {
         fprintf(stderr, "Usage: %s <registry IP> <registry port> <peer ID>\n", argv[0]);
         exit(1);
     }
 
-    peer_id = atoi(argv[3]); // Convert peer ID from argument
+    peer_id = atoi(argv[3]); // convert peer ID from argument
 
-    // Networking initialization
-    struct sockaddr_in registryAddr; // Registry address
-    struct hostent *registryHost;    // Host information
+    // networking initialization
+    struct sockaddr_in registryAddr; // registry address
+    struct hostent *registryHost;    // host information
 
-    // Create socket
+    // create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0)
     {
@@ -235,8 +230,8 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    // Resolve registry hostname/IP
-    // Resolve registry hostname/IP
+    // resolve registry hostname/IP
+    // resolve registry hostname/IP
     registryHost = gethostbyname(argv[1]);
     if (registryHost == NULL)
     {
@@ -244,14 +239,14 @@ int main(int argc, char *argv[])
         exit(1);
     }
 
-    // Fill registry address structure
+    // fill registry address structure
     memset(&registryAddr, 0, sizeof(registryAddr)); // Ensure struct is empty
     registryAddr.sin_family = AF_INET;
-    // Correctly accessing the first address from h_addr_list
+    // correctly accessing the first address from h_addr_list
     memcpy(&registryAddr.sin_addr, registryHost->h_addr_list[0], registryHost->h_length);
-    registryAddr.sin_port = htons(atoi(argv[2])); // Registry port
+    registryAddr.sin_port = htons(atoi(argv[2])); // registry port
 
-    // Connect to registry
+    // connect to registry
     if (connect(sock, (struct sockaddr *)&registryAddr, sizeof(registryAddr)) < 0)
     {
         perror("Failed to connect to registry");
