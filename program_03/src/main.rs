@@ -10,6 +10,7 @@ mod error;
 mod data;
 mod types;
 mod join;
+mod register;
 mod publish;
 mod search;
 mod fetch;
@@ -156,6 +157,7 @@ fn main() {
     let mut input = String::new();
 
     let mut joined_registry = false;
+    let mut listener_thread = None;
 
     loop {
         stdout.write(b"> ")
@@ -186,6 +188,11 @@ fn main() {
                     println!("{}", err);
                 } else {
                     joined_registry = true;
+                }
+            }
+            "register" | "REGISTER" => {
+                match register::send_register(&mut conn, peer_id) {
+                    Ok(listener) => 
                 }
             }
             "publish" | "PUBLISH" => {
