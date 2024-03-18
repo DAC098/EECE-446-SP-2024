@@ -22,23 +22,25 @@ impl TryFrom<u8> for ActionType {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            x if value == ActionType::JOIN as u8 => Ok(ActionType::JOIN),
-            x if value == ActionType::PUBLISH as u8 => Ok(ActionType::PUBLISH),
-            x if value == ActionType::SEARCH as u8 => Ok(ActionType::SEARCH),
-            x if value == ActionType::FETCH as u8 => Ok(ActionType::FETCH),
-            x if value == ActionType::REGISTER as u8 => Ok(ActionType::REGISTER),
+            x if x == ActionType::JOIN as u8 => Ok(ActionType::JOIN),
+            x if x == ActionType::PUBLISH as u8 => Ok(ActionType::PUBLISH),
+            x if x == ActionType::SEARCH as u8 => Ok(ActionType::SEARCH),
+            x if x == ActionType::FETCH as u8 => Ok(ActionType::FETCH),
+            x if x == ActionType::REGISTER as u8 => Ok(ActionType::REGISTER),
             _ => Err(InvalidActionType)
+        }
     }
 }
 
 #[repr(u8)]
 pub enum ResponseType {
     SUCCESS = 0,
-    UNKNOWN_ACTION = 1,
-    UNHANDLED_ACTION = 2,
-    NO_DATA = 3,
-    TOO_MUCH_DATA = 4,
-    INVALID_DATA = 5,
+    ERROR = 1,
+    UNKNOWN_ACTION = 2,
+    UNHANDLED_ACTION = 3,
+    NO_DATA = 4,
+    TOO_MUCH_DATA = 5,
+    INVALID_DATA = 6,
 }
 
 pub struct InvalidResponseType;
@@ -48,12 +50,13 @@ impl TryFrom<u8> for ResponseType {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            x if value == ResponseType::SUCCESS as u8 => Ok(ResponseType::SUCCESS),
-            x if value == ResponseType::UNKNOWN_ACTION as u8 => Ok(ResponseType::UNKNOWN_ACTION),
-            x if value == ResponseType::UNHANDLED_ACTION as u8 => Ok(ResponseType::UNHANDLED_ACTION),
-            x if value == ResponseType::NO_DATA as u8 => Ok(ResponseType::NO_DATA),
-            x if value == ResponseType::TOO_MUCH_DATA as u8 => Ok(ResponseType::TOO_MUCH_DATA),
-            x if value == ResponseType::INVALID_DATA as u8 => Ok(ResponseType::INVALID_DATA),
+            x if x == ResponseType::SUCCESS as u8 => Ok(ResponseType::SUCCESS),
+            x if x == ResponseType::ERROR as u8 => Ok(ResponseType::ERROR),
+            x if x == ResponseType::UNKNOWN_ACTION as u8 => Ok(ResponseType::UNKNOWN_ACTION),
+            x if x == ResponseType::UNHANDLED_ACTION as u8 => Ok(ResponseType::UNHANDLED_ACTION),
+            x if x == ResponseType::NO_DATA as u8 => Ok(ResponseType::NO_DATA),
+            x if x == ResponseType::TOO_MUCH_DATA as u8 => Ok(ResponseType::TOO_MUCH_DATA),
+            x if x == ResponseType::INVALID_DATA as u8 => Ok(ResponseType::INVALID_DATA),
             _ => Err(InvalidResponseType)
         }
     }

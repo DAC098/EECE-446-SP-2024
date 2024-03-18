@@ -3,6 +3,8 @@ use std::time::Duration;
 use std::str::FromStr;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{Ordering, AtomicBool};
 
 use dns_lookup::{lookup_host};
 
@@ -14,6 +16,7 @@ mod register;
 mod publish;
 mod search;
 mod fetch;
+mod listener;
 
 use types::{DEFAULT_PORT, PeerId};
 
@@ -157,7 +160,9 @@ fn main() {
     let mut input = String::new();
 
     let mut joined_registry = false;
+
     let mut listener_thread = None;
+    let accept_conn = Arc::new(AtomicBool::new(true));
 
     loop {
         stdout.write(b"> ")
@@ -172,8 +177,13 @@ fn main() {
 
         // trim the given string input and split it on any whitespace
         // characters found in the string
-        let mut split = input.trim()
-            .split_whitespace();
+        let trimmed = input.trim();
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let mut split = trimmed.split_whitespace();
 
         // attempt to get the desired command
         let Some(command) = split.next() else {
@@ -192,7 +202,24 @@ fn main() {
             }
             "register" | "REGISTER" => {
                 match register::send_register(&mut conn, peer_id) {
-                    Ok(listener) => 
+                    Ok(listen) => {
+                        let shared_dir_clone = shared_dir.clone()
+                            .into();
+                        let accept_conn_clone = accept_conn.clone();
+
+                        listener_thread = Some(std::thread::spawn(move || {
+                            listener::handle_listener(
+                                listen,
+                                shared_dir_clone,
+                                accept_conn_clone
+                            );
+                        }));
+
+                        joined_registry = true;
+                    },
+                    Err(err) => {
+                        println!("{}", err);
+                    }
                 }
             }
             "publish" | "PUBLISH" => {
@@ -244,6 +271,16 @@ fn main() {
             _ => {
                 println!("unknown command provided: \"{}\"", command);
             }
+        }
+    }
+
+    println!("instructing listener to close");
+
+    accept_conn.store(false, Ordering::Relaxed);
+
+    if let Some(thread_handle) = listener_thread {
+        if let Err(err) = thread_handle.join() {
+            println!("listener thread error: {:?}", err);
         }
     }
 }

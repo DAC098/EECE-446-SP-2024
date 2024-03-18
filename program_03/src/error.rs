@@ -26,6 +26,17 @@ impl Error {
             source: None,
         }
     }
+
+    pub fn with<C, E>(cxt: C, err: E) -> Self
+    where
+        C: Into<String>,
+        E: Into<BoxDynError>
+    {
+        Error {
+            context: cxt.into(),
+            source: Some(err.into())
+        }
+    }
 }
 
 // if we want a custom struct to be printed by using print!("{}", obj) then we
