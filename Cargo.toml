@@ -19,3 +19,6 @@ version = "0.5"
 
 [workspace.dependencies.dns-lookup]
 version = "2.0.4"
+
+[workspace.dependencies.ascii]
+version = "1"

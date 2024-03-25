@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{Ordering, AtomicBool};
 
-use dns_lookup::{lookup_host};
+use dns_lookup::lookup_host;
 
 mod error;
 mod data;
@@ -69,6 +69,10 @@ fn print_cmds() {
     println!("\
 JOIN | join: the client will join the registry with the specified peer id
 
+REGISTER | register: similar to the join command but will signal to the \
+registry that this client will accept connections from other peers for \
+downloading files.
+
 PUBLISH | publish: the client will send a list of available ilfes in the \
 shared directory
 
@@ -122,18 +126,14 @@ fn main() {
         if shared.is_absolute() {
             shared
         } else {
-            let cwd = std::env::current_dir()
-                .expect("failed to retrieve current working directory");
-
-            cwd.join(shared)
+            std::env::current_dir()
+                .expect("failed to retrieve current working directory")
+                .join(shared)
         }
     } else {
-        let cwd = std::env::current_dir()
-            .expect("failed to retrieve current working directory");
-
-        let shared = cwd.join("shared_dir");
-
-        shared
+        std::env::current_dir()
+            .expect("failed to retrieve current working directory")
+            .join("shared_dir")
     };
 
     {
@@ -161,7 +161,10 @@ fn main() {
 
     let mut joined_registry = false;
 
+    // contains the thread handle for the peer listener socket
     let mut listener_thread = None;
+    // the flag shared between the listener thread and the main thread to
+    // indicate when the listener thread should stop accepting connections
     let accept_conn = Arc::new(AtomicBool::new(true));
 
     loop {
@@ -276,6 +279,8 @@ fn main() {
 
     println!("instructing listener to close");
 
+    // set the flag to false to indicate to the listener thread should stop
+    // accepting new connections and close the listener
     accept_conn.store(false, Ordering::Relaxed);
 
     if let Some(thread_handle) = listener_thread {
