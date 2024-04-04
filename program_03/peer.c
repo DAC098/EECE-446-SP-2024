@@ -1,4 +1,4 @@
-// Program_03 - Peer-to-Peer File Download
+// Program_02 - Peer-to-Peer Introduction
 // Madison Webb and David Cathers
 
 #include <stdio.h>
@@ -20,14 +20,12 @@
 
 int sock;
 unsigned int peer_id;
-char peerIPStrGlobal[INET_ADDRSTRLEN]; // to store the peer's IP address as a string
-unsigned short peerPortGlobal;         // to store the peer's port number
 
 void join()
 {
     // buffer for the JOIN request
     unsigned char buffer[5];
-    buffer[0] = 0; // action code for JOIN is 0
+    buffer[0] = 0; // Action code for JOIN is 0
     *(unsigned int *)(buffer + 1) = htonl(peer_id);
 
     // send the JOIN request to the registry
@@ -68,7 +66,7 @@ void publish()
                 if (offset + nameLen + 1 < sizeof(buffer))
                 {
                     strcpy(buffer + offset, ent->d_name); // copy the file name
-                    offset += nameLen + 1;                // move offset, account for null terminator
+                    offset += nameLen + 1;                // move offset, accounting for null terminator
                     fileCount++;
                 }
                 else
@@ -82,10 +80,10 @@ void publish()
 
     closedir(dir);
 
-    buffer[0] = 1;                                    // action code for PUBLISH
+    buffer[0] = 1; // action code for PUBLISH
     *(unsigned int *)(buffer + 1) = htonl(fileCount); // place the file count at the beginning of the buffer, in network byte order
 
-    // send the PUBLISH request to the registry
+    // Send the PUBLISH request to the registry
     if (send(sock, buffer, offset, 0) < 0)
     {
         perror("send");
@@ -98,7 +96,7 @@ void publish()
 
 void search()
 {
-    char fileName[101]; // buffer to hold file name
+    char fileName[101]; // buffer to hold file name, assuming max length is 100
     printf("Enter a file name: \n");
     scanf("%100s", fileName); // read file name, ensuring not to overflow buffer
     char buffer[1024];
@@ -154,130 +152,8 @@ void search()
     }
 }
 
-void searchForFetch(char *fileName)
-{
-    char buffer[1024];
-    int fileNameLength = strlen(fileName);
-    buffer[0] = 2; // action code for SEARCH
-    strcpy(buffer + 1, fileName);
-    buffer[fileNameLength + 1] = '\0'; // ensure null-termination
-
-    // send the SEARCH request to the registry
-    if (send(sock, buffer, fileNameLength + 2, 0) < 0)
-    {
-        perror("send");
-        return;
-    }
-
-    // expecting to receive peer information: peerID, peerIPv4, peerPort
-    unsigned int peerID;
-    unsigned int peerIPv4;
-    unsigned short peerPort;
-
-    int bytesReceived = recv(sock, &peerID, sizeof(peerID), 0);
-    if (bytesReceived <= 0)
-    {
-        perror("recv");
-        return;
-    }
-
-    bytesReceived += recv(sock, &peerIPv4, sizeof(peerIPv4), 0);
-    bytesReceived += recv(sock, &peerPort, sizeof(peerPort), 0);
-
-    if (bytesReceived < sizeof(peerID) + sizeof(peerIPv4) + sizeof(peerPort))
-    {
-        fprintf(stderr, "Incomplete response from registry.\n");
-        return;
-    }
-
-    peerID = ntohl(peerID);
-    peerPort = ntohs(peerPort);
-
-    // store the peer's address and port for fetching the file
-    if (peerID != 0 && peerIPv4 != 0 && peerPort != 0)
-    {
-        inet_ntop(AF_INET, &peerIPv4, peerIPStrGlobal, INET_ADDRSTRLEN);
-        peerPortGlobal = peerPort;
-    }
-    else
-    {
-        printf("File not found in the registry.\n");
-    }
-}
-
-void fetch()
-{
-    char fileName[MAX_FILENAME_LENGTH + 1]; // buffer to hold file name
-    printf("Enter a file name to fetch: \n");
-    scanf("%100s", fileName); // read file name, ensuring not to overflow buffet
-
-    // send a SEARCH request for the file
-    searchForFetch(fileName); // Tmodified search function tailored for fetch
-
-    int peerSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (peerSock < 0)
-    {
-        perror("Failed to create socket for fetching file");
-        return;
-    }
-
-    // setup peer address
-    struct sockaddr_in peerAddr;
-    memset(&peerAddr, 0, sizeof(peerAddr));
-    peerAddr.sin_family = AF_INET;
-    peerAddr.sin_port = htons(peerPort);
-    inet_pton(AF_INET, peerIPStr, &peerAddr.sin_addr);
-
-    // connect to the peer
-    if (connect(peerSock, (struct sockaddr *)&peerAddr, sizeof(peerAddr)) < 0)
-    {
-        perror("Failed to connect to peer for fetching file");
-        close(peerSock);
-        return;
-    }
-
-    // send FETCH request
-    char fetchBuffer[101]; // 1 byte for action + 100 for filename
-    fetchBuffer[0] = 3;    // action code for FETCH
-    strcpy(fetchBuffer + 1, fileName);
-    if (send(peerSock, fetchBuffer, strlen(fileName) + 2, 0) < 0)
-    { // +2 for action and null terminator
-        perror("Failed to send FETCH request");
-        close(peerSock);
-        return;
-    }
-
-    // receive file content
-    FILE *file = fopen(fileName, "wb"); // open file for writing in binary mode
-    if (file == NULL)
-    {
-        perror("Failed to open file for writing");
-        close(peerSock);
-        return;
-    }
-
-    int bytesReceived;
-    char fileBuffer[4096]; // buffer for file data
-    while ((bytesReceived = recv(peerSock, fileBuffer, sizeof(fileBuffer), 0)) > 0)
-    {
-        fwrite(fileBuffer, sizeof(char), bytesReceived, file);
-    }
-
-    if (bytesReceived < 0)
-    {
-        perror("Failed to receive file data");
-    }
-    else
-    {
-        printf("File '%s' fetched successfully.\n", fileName);
-    }
-
-    fclose(file);
-    close(peerSock);
-}
-
 void close_app()
-{
+{ // named to avoid conflict with exit()
     if (sock != -1)
     {
         close(sock); // close the network socket
@@ -293,7 +169,6 @@ void print_options()
     printf("JOIN: sends a JOIN request to the registry.\n");
     printf("PUBLISH: send a PUBLISH request to the registry.\n");
     printf("SEARCH: reads a file name from the terminal, print peer info.\n");
-    printf("FETCH: fetch a file from another peer and save it locally.\n");
     printf("EXIT: close the peer application.\n\n");
 
     while (1)
@@ -312,10 +187,6 @@ void print_options()
             else if (strcmp(selection, "SEARCH") == 0)
             {
                 search();
-            }
-            else if (strcmp(selection, "FETCH") == 0)
-            {
-                fetch();
             }
             else if (strcmp(selection, "EXIT") == 0)
             {
@@ -360,6 +231,7 @@ int main(int argc, char *argv[])
     }
 
     // resolve registry hostname/IP
+    // resolve registry hostname/IP
     registryHost = gethostbyname(argv[1]);
     if (registryHost == NULL)
     {
@@ -368,8 +240,9 @@ int main(int argc, char *argv[])
     }
 
     // fill registry address structure
-    memset(&registryAddr, 0, sizeof(registryAddr));
+    memset(&registryAddr, 0, sizeof(registryAddr)); // Ensure struct is empty
     registryAddr.sin_family = AF_INET;
+    // correctly accessing the first address from h_addr_list
     memcpy(&registryAddr.sin_addr, registryHost->h_addr_list[0], registryHost->h_length);
     registryAddr.sin_port = htons(atoi(argv[2])); // registry port
 
