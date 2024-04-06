@@ -1,4 +1,4 @@
-// Program_02 - Peer-to-Peer Introduction
+// Program_03 - Peer-to-Peer File Download
 // Madison Webb and David Cathers
 
 #include <stdio.h>
@@ -259,9 +259,19 @@ void fetch()
 
     int bytesReceived;
     char fileBuffer[4096]; // buffer for file data
+    int firstChunk = 1;
     while ((bytesReceived = recv(peerSock, fileBuffer, sizeof(fileBuffer), 0)) > 0)
     {
-        fwrite(fileBuffer, sizeof(char), bytesReceived, file);
+        // If this is the first chunk, skip the first byte which is the result code
+        if (firstChunk)
+        {
+            fwrite(fileBuffer + 1, sizeof(char), bytesReceived - 1, file);
+            firstChunk = 0; // Reset flag after handling the first chunk
+        }
+        else
+        {
+            fwrite(fileBuffer, sizeof(char), bytesReceived, file);
+        }
     }
 
     if (bytesReceived < 0)
