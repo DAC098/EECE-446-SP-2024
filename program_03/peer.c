@@ -1,4 +1,4 @@
-// Program_03 - Peer-to-Peer File Download
+// Program_02 - Peer-to-Peer Introduction
 // Madison Webb and David Cathers
 
 #include <stdio.h>
