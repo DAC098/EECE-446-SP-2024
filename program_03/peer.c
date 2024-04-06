@@ -17,6 +17,7 @@
 
 #define MAX_FILES 100
 #define FILE_PATH_BUFFER_SIZE 512
+#define MAX_FILENAME_LENGTH 100
 
 int sock;
 unsigned int peer_id;
@@ -208,7 +209,7 @@ void searchForFetch(char *fileName)
 void fetch()
 {
     char fileName[MAX_FILENAME_LENGTH + 1]; // buffer to hold file name
-    printf("Enter a file name to fetch: \n");
+    printf("Enter a file name: \n");
     scanf("%100s", fileName); // read file name, ensuring not to overflow buffet
 
     // send a SEARCH request for the file
@@ -225,8 +226,8 @@ void fetch()
     struct sockaddr_in peerAddr;
     memset(&peerAddr, 0, sizeof(peerAddr));
     peerAddr.sin_family = AF_INET;
-    peerAddr.sin_port = htons(peerPort);
-    inet_pton(AF_INET, peerIPStr, &peerAddr.sin_addr);
+    peerAddr.sin_port = htons(peerPortGlobal);
+    inet_pton(AF_INET, peerIPStrGlobal, &peerAddr.sin_addr);
 
     // connect to the peer
     if (connect(peerSock, (struct sockaddr *)&peerAddr, sizeof(peerAddr)) < 0)
