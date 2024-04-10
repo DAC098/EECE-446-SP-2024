@@ -5,10 +5,12 @@
 #include <sys/types.h>
 #include <string.h>
 #include <netdb.h>
+#include <errno.h>
 
 #define SERVER_PORT "5432"
 #define MAX_LINE 256
 #define MAX_PENDING 5
+#define BUFF_SIZE 2048
 
 /*
  * Create, bind and passive open a socket on a local interface for the provided service.
@@ -36,20 +38,27 @@ int main(void) {
     fd_set call_set;
     FD_ZERO(&call_set);
 
+    printf("[server] creating listening socket\n");
+
     // listen_socket is the fd on which the program can accept() new connections
-    int listen_socket = bind_and_listen(SERVER_PORT);
-    FD_SET(listen_socket, &all_sockets);
+    int listen_sock = bind_and_listen(SERVER_PORT);
+    FD_SET(listen_sock, &all_sockets);
 
     // max_socket should always contain the socket fd with the largest value, just one
     // for now.
-    int max_socket = listen_socket;
+    int max_socket = listen_sock;
+
+    uint8_t recv_buffer[BUFF_SIZE];
 
     while (1) {
         call_set = all_sockets;
+
+        printf("[server] waiting for activity\n");
+
         int num_s = select(max_socket + 1, &call_set, NULL, NULL, NULL);
 
         if (num_s < 0) {
-            perror("ERROR in select() call");
+            perror("[server] ERROR in select() call");
             return -1;
         }
 
@@ -62,14 +71,64 @@ int main(void) {
             }
 
             // A new connection is ready
-            if (s == listen_socket) {
+            if (s == listen_sock) {
+                printf("[server] accepting new connection\n");
+
                 // What should happen with a new connection?
                 // You need to call at least one function here
                 // and update some variables.
+                struct sockaddr client_addr;
+                socklen_t client_len;
+
+                int client_sock = accept(listen_sock, &client_addr, &client_len);
+
+                if (client_sock == -1) {
+                    perror("[server] failed to accept client");
+                    continue;
+                }
+
+                FD_SET(client_sock, &all_sockets);
+
+                if (client_sock > max_socket) {
+                    max_socket = client_sock;
+                }
             } else { // A connected socket is ready
                 // Put your code here for connected sockets.
                 // Don't forget to handle a closed socket, which will
                 // end up here as well.
+                ssize_t read = recv(s, recv_buffer, BUFF_SIZE, 0);
+
+                if (read <= 0) {
+                    if (read == -1) {
+                        fprintf(stderr, "[server] client %d error: %s\n", s, strerror(errno));
+                    }
+
+                    printf("[server] client: %d closing\n", s);
+
+                    close(s);
+
+                    FD_CLR(s, &all_sockets);
+
+                    continue;
+                }
+
+                printf("[server] client %d:", s);
+
+                for (ssize_t index = 0; index < read; ++index) {
+                    if (recv_buffer[index] <= 0x0f) {
+                        printf(" 0%x", recv_buffer[index]);
+                    } else {
+                        printf(" %x", recv_buffer[index]);
+                    }
+                }
+
+                printf("\n");
+
+                for (ssize_t index = 0; index < read; ++index) {
+                    printf("%c", recv_buffer[index]);
+                }
+
+                printf("\n");
             }
         }
     }
@@ -101,7 +160,7 @@ int bind_and_listen(const char *service) {
 
     /* Get local address info */
     if ((s = getaddrinfo(NULL, service, &hints, &result)) != 0) {
-        fprintf(stderr, "stream-talk-server: getaddrinfo: %s\n", gai_strerror(s));
+        fprintf(stderr, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(s));
         return -1;
     }
 
@@ -112,6 +171,7 @@ int bind_and_listen(const char *service) {
         }
 
         if (!bind(s, rp->ai_addr, rp->ai_addrlen)) {
+            perror("[server] bind_and_listen: bind");
             break;
         }
 
@@ -119,17 +179,16 @@ int bind_and_listen(const char *service) {
     }
 
     if (rp == NULL) {
-        perror("stream-talk-server: bind");
         return -1;
     }
 
     if (listen(s, MAX_PENDING) == -1) {
-        perror("stream-talk-server: listen");
+        perror("[server] bind_and_listen: listen");
         close(s);
         return -1;
     }
 
-    freeaddrinfo( result );
+    freeaddrinfo(result);
 
     return s;
 }

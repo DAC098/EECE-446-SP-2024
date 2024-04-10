@@ -1,6 +1,7 @@
 use std::net::TcpStream;
 use std::io::{Read, Write};
 use std::default::Default;
+use std::fmt::Write as _;
 
 use rand::RngCore;
 use rand::distributions::{Alphanumeric, DistString};
@@ -9,9 +10,13 @@ use clap::{Subcommand, Args};
 
 #[derive(Debug, Args)]
 pub struct BytesArgs {
-    /// repeat the message or repeat the message n times
+    /// repeat the message n times
     #[arg(long)]
-    repeat: Option<Option<usize>>,
+    repeat: Option<usize>,
+
+    /// repeat indefinitly
+    #[arg(long)]
+    repeat_inf: bool,
 
     /// delay a certain amount of milliseconds between messages
     #[arg(long)]
@@ -21,6 +26,10 @@ pub struct BytesArgs {
     #[arg(long, default_value="2048")]
     buf_size: usize,
 
+    /// will only send writes to the remote host
+    #[arg(long)]
+    no_read: bool,
+
     #[command(subcommand)]
     command: Option<MessageCmds>
 }
@@ -29,8 +38,10 @@ impl Default for BytesArgs {
     fn default() -> Self {
         BytesArgs {
             repeat: None,
+            repeat_inf: false,
             buf_size: 2048,
             delay: None,
+            no_read: false,
             command: Default::default(),
         }
     }
@@ -67,12 +78,12 @@ impl MessageCmds {
     fn get_message(&self) -> Result<Vec<u8>> {
         let rtn = match self {
             MessageCmds::Ping => {
-                println!("creating ping message");
+                tracing::info!("creating ping message");
 
                 Vec::from(b"ping")
             },
             MessageCmds::Rand { len } => {
-                println!("creating rand bytes {}", len);
+                tracing::info!("creating rand bytes {}", len);
 
                 let mut bytes = vec![0u8; *len];
 
@@ -83,14 +94,14 @@ impl MessageCmds {
                 bytes
             },
             MessageCmds::AlphaRand { len } => {
-                println!("creating rand alphanumeric bytes {}", len);
+                tracing::info!("creating rand alphanumeric bytes {}", len);
 
                 let rand_string = Alphanumeric.sample_string(&mut rand::thread_rng(), *len);
 
                 rand_string.into_bytes()
             },
             MessageCmds::Message { say } => {
-                println!("creating message {}", say.len());
+                tracing::info!("creating message {}", say.len());
 
                 say.clone().into_bytes()
             }
@@ -110,34 +121,36 @@ impl Default for MessageCmds {
 pub fn handle(mut stream: TcpStream, mut args: BytesArgs) -> Result<()> {
     let command = args.command.take().unwrap_or_default();
 
-    if let Some(maybe_n_times) = args.repeat {
-        if let Some(n_times) = maybe_n_times {
-            for _ in 0..n_times {
-                let bytes = command.get_message()?;
+    if let Some(n_times) = args.repeat {
+        for _ in 0..n_times {
+            let bytes = command.get_message()?;
 
-                write_to_socket(&mut stream, &bytes, args.buf_size)?;
+            write_to_socket(&mut stream, &bytes, args.buf_size)?;
 
+            if !args.no_read {
                 read_from_socket(&mut stream, bytes.len(), args.buf_size)?;
-
-                if let Some(ms) = &args.delay {
-                    let duration = std::time::Duration::from_millis(*ms);
-
-                    std::thread::sleep(duration);
-                }
             }
-        } else {
-            loop {
-                let bytes = command.get_message()?;
 
-                write_to_socket(&mut stream, &bytes, args.buf_size)?;
+            if let Some(ms) = &args.delay {
+                let duration = std::time::Duration::from_millis(*ms);
 
+                std::thread::sleep(duration);
+            }
+        }
+    } else if args.repeat_inf {
+        loop {
+            let bytes = command.get_message()?;
+
+            write_to_socket(&mut stream, &bytes, args.buf_size)?;
+
+            if !args.no_read {
                 read_from_socket(&mut stream, bytes.len(), args.buf_size)?;
+            }
 
-                if let Some(ms) = &args.delay {
-                    let duration = std::time::Duration::from_millis(*ms);
+            if let Some(ms) = &args.delay {
+                let duration = std::time::Duration::from_millis(*ms);
 
-                    std::thread::sleep(duration);
-                }
+                std::thread::sleep(duration);
             }
         }
     } else {
@@ -145,7 +158,9 @@ pub fn handle(mut stream: TcpStream, mut args: BytesArgs) -> Result<()> {
 
         write_to_socket(&mut stream, &bytes, args.buf_size)?;
 
-        read_from_socket(&mut stream, bytes.len(), args.buf_size)?;
+        if !args.no_read {
+            read_from_socket(&mut stream, bytes.len(), args.buf_size)?;
+        }
     }
 
     Ok(())
@@ -165,7 +180,7 @@ fn write_to_socket(stream: &mut TcpStream, bytes: &[u8], chunk_size: usize) -> R
     };
 
     loop {
-        println!("writing byte range {}..{}", start_index, end_index);
+        tracing::info!("writing byte range {}..{}", start_index, end_index);
 
         let wrote = stream.write(&bytes[start_index..end_index])
             .context("failed to write data to tcp stream")?;
@@ -195,30 +210,30 @@ fn read_from_socket(stream: &mut TcpStream, expected_read: usize, chunk_size: us
     let mut total_read = 0usize;
 
     loop {
-        buffer.fill(0);
-
         let read = stream.read(&mut buffer)
             .context("failed to read data from tcp stream")?;
 
         if read == 0 {
-            println!("read 0 bytes client disconnected");
+            tracing::info!("read 0 bytes client disconnected");
             break;
         }
 
         total_read += read;
 
-        print!("[{}]:", read);
+        let mut msg = format!("[{}]:", read);
 
         for b in &buffer[0..read] {
-            print!(" {:02x}", b);
+            write!(&mut msg, " {:02x}", b).unwrap();
         }
 
         let cow = String::from_utf8_lossy(&buffer[0..read]);
 
-        println!("\n\u{2514}\u{2500}\"{}\"", cow);
+        write!(&mut msg, "\n\u{2514}\u{2500}\"{}\"", cow).unwrap();
+
+        tracing::info!("{}", msg);
 
         if total_read >= expected_read {
-            println!("read expected amount of bytes");
+            tracing::warn!("read expected amount of bytes");
             break;
         }
     }

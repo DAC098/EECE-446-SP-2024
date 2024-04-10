@@ -2,10 +2,12 @@ use std::net::{SocketAddr, IpAddr};
 use std::default::Default;
 use std::str::FromStr;
 use std::convert::Infallible;
+use std::time::Duration;
 
 use socket2::{Socket, Domain, Type};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Error, Context, Result};
 use clap::{Parser, Subcommand};
+use tracing_subscriber::{FmtSubscriber, EnvFilter};
 
 mod bytes;
 
@@ -36,16 +38,20 @@ impl HostKind {
 /// specified remote host. defaults to bytes command
 #[derive(Debug, Parser)]
 struct CliArgs {
+    /// enables logging
+    #[arg(long)]
+    log: bool,
+
     /// local ip address to attach to
-    #[arg(long, default_value="::")]
-    local_ip: IpAddr,
+    #[arg(long)]
+    local_ip: Option<IpAddr>,
 
     /// local port to attach to
-    #[arg(long, default_value="0")]
-    local_port: u16,
+    #[arg(long)]
+    local_port: Option<u16>,
 
     /// remote ip addres to connect to
-    #[arg(long, default_value="::", value_parser(HostKind::parse))]
+    #[arg(long, default_value="0.0.0.0", value_parser(HostKind::parse))]
     remote_host: HostKind,
 
     /// remote port to connect to
@@ -71,12 +77,17 @@ impl Default for ExecCmds {
 fn main() -> Result<()> {
     let args = CliArgs::parse();
 
-    let socket = Socket::new(Domain::IPV6, Type::STREAM, None).context("failed to create socket")?;
-    socket.set_only_v6(false).context("failed to set \"only_v6\" flag")?;
+    if args.log {
+        std::env::set_var("RUST_LOG", "info");
+    } else {
+        std::env::set_var("RUST_LOG", "error");
+    }
 
-    bind_addr(&socket, &args)?;
-    connect_host(&socket, &args)?;
+    FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
+    let socket = connect_host(&args)?;
     let stream = socket.into();
 
     match args.command.unwrap_or_default() {
@@ -85,10 +96,10 @@ fn main() -> Result<()> {
 }
 
 /// binds to the specified local ip and port
-fn bind_addr(socket: &Socket, args: &CliArgs) -> Result<()> {
-    let local_addr = SocketAddr::from((args.local_ip.clone(), args.local_port));
+fn bind_addr(socket: &Socket, ip: IpAddr, port: u16) -> Result<()> {
+    let local_addr = SocketAddr::from((ip, port));
 
-    println!("attempting to bind to {}", local_addr);
+    tracing::info!("attempting to bind to {}", local_addr);
 
     let sock_addr = local_addr.into();
 
@@ -97,15 +108,24 @@ fn bind_addr(socket: &Socket, args: &CliArgs) -> Result<()> {
 }
 
 /// attempts to connect to remote ip and port
-fn connect_addr(socket: &Socket, ip: IpAddr, port: u16) -> Result<()> {
-    let remote_addr = SocketAddr::from((ip, port));
+fn connect_addr(args: &CliArgs, addr: SocketAddr) -> Result<Socket> {
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
 
-    println!("attempting to connect with {}", remote_addr);
+    let socket = Socket::new(domain, Type::STREAM, None)
+        .context("failed to create socket")?;
 
-    let sock_addr = remote_addr.into();
+    let sock_addr = addr.into();
 
-    socket.connect(&sock_addr)
-        .context("failed connecting to remote socket addr")
+    socket.connect_timeout(&sock_addr, Duration::from_secs(3))
+        .context("failed connecting to remote socket addr")?;
+
+    tracing::info!("connected to remote host");
+
+    Ok(socket)
 }
 
 /// attempts to connect the provided socket to the specified remote host
@@ -113,20 +133,29 @@ fn connect_addr(socket: &Socket, ip: IpAddr, port: u16) -> Result<()> {
 /// if the provided remote host is a dns name then it will perform the lookup 
 /// and attempt to connect to each until one is successful. errors out if it
 /// failed to connect to any ip address.
-fn connect_host(socket: &Socket, args: &CliArgs) -> Result<()> {
+fn connect_host(args: &CliArgs) -> Result<Socket> {
     match &args.remote_host {
-        HostKind::Ip(ip) => connect_addr(socket, ip.clone(), args.remote_port),
+        HostKind::Ip(ip) => {
+            let socket_addr = SocketAddr::from((ip.clone(), args.remote_port));
+
+            connect_addr(args, socket_addr)
+        }
         HostKind::Dns(host) => {
-            println!("dns lookup on \"{}\"", host);
+            tracing::info!("dns lookup on \"{}\"", host);
 
             let ips = dns_lookup::lookup_host(&host)
                 .context("failed to lookup remote host")?;
 
             for ip in ips {
-                if let Err(err) = connect_addr(socket, ip, args.remote_port) {
-                    println!("{}", err);
-                } else {
-                    return Ok(());
+                let socket_addr = SocketAddr::from((ip, args.remote_port));
+
+                match connect_addr(args, socket_addr) {
+                    Ok(socket) => {
+                        return Ok(socket);
+                    }
+                    Err(err) => {
+                        println!("{:?}", err);
+                    }
                 }
             }
 
