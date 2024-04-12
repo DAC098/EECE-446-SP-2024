@@ -78,7 +78,7 @@ int main(void) {
                 // You need to call at least one function here
                 // and update some variables.
                 struct sockaddr client_addr;
-                socklen_t client_len;
+                socklen_t client_len = sizeof(client_addr);
 
                 int client_sock = accept(listen_sock, &client_addr, &client_len);
 

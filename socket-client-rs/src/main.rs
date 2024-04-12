@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, IpAddr};
+use std::net::{TcpStream, SocketAddr, IpAddr};
 use std::default::Default;
 use std::str::FromStr;
 use std::convert::Infallible;
@@ -88,7 +88,15 @@ fn main() -> Result<()> {
         .init();
 
     let socket = connect_host(&args)?;
-    let stream = socket.into();
+    let stream: TcpStream = socket.into();
+
+    if let Ok(local) = stream.local_addr() {
+        tracing::info!("local addr: {local}");
+    }
+
+    if let Ok(peer) = stream.peer_addr() {
+        tracing::info!("peer addr: {peer}");
+    }
 
     match args.command.unwrap_or_default() {
         ExecCmds::Bytes(given) => bytes::handle(stream, given),
@@ -118,12 +126,10 @@ fn connect_addr(args: &CliArgs, addr: SocketAddr) -> Result<Socket> {
     let socket = Socket::new(domain, Type::STREAM, None)
         .context("failed to create socket")?;
 
-    let sock_addr = addr.into();
+    let sock_addr = addr.clone().into();
 
     socket.connect_timeout(&sock_addr, Duration::from_secs(3))
         .context("failed connecting to remote socket addr")?;
-
-    tracing::info!("connected to remote host");
 
     Ok(socket)
 }
