@@ -291,6 +291,8 @@ fn main() {
         shared
     };
 
+    println!("{}", shared_dir.display());
+
     {
         // check to see if the given directory is an actual directory
         let metadata = shared_dir.metadata()
