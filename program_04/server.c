@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <getopt.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <signal.h>
@@ -14,10 +15,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define SERVER_PORT "5432"
 #define MAX_LINE 256
 #define MAX_PENDING 5
 #define BUFF_SIZE 2048
+
+#define CUSTOM_OUTPUT false
 
 const uint8_t VERBOSE = 1;
 
@@ -132,7 +134,44 @@ void print_buffer(const uint8_t *buf, size_t length, uint8_t flags);
  */
 void handle_signal(int signo);
 
-int main(void) {
+int main(int argc, char **argv) {
+    char *listen_port = "5432";
+
+    static struct option long_options[] = {
+        {"listen-port", required_argument, 0, 0},
+        {0,0,0,0}
+    };
+
+    int option_index = 0;
+
+    while (1) {
+        int c = getopt_long(argc, argv, "", long_options, &option_index);
+
+        if (c == -1) {
+            break;
+        }
+
+        switch (c) {
+        case 0:
+            switch (option_index) {
+            case 0:
+                listen_port = optarg;
+                break;
+            default:
+                break;
+            }
+            break;
+        default:
+            return 1;
+        }
+    }
+
+    if (optind < argc) {
+        int start = optind;
+
+        listen_port = argv[start];
+    }
+
     // ------------------------------------------------------------------------
     // signal intercepts
     // ------------------------------------------------------------------------
@@ -188,9 +227,11 @@ int main(void) {
     FD_ZERO(&srv.all_socks);
     FD_ZERO(&call_set);
 
-    printf("[server] creating listening socket\n");
+    if (CUSTOM_OUTPUT) {
+        printf("[server] creating listening socket\n");
+    }
 
-    srv.listen_sock = bind_and_listen(SERVER_PORT);
+    srv.listen_sock = bind_and_listen(listen_port);
     FD_SET(srv.listen_sock, &srv.all_socks);
 
     int max_socket = srv.listen_sock;
@@ -202,7 +243,9 @@ int main(void) {
     while (1) {
         call_set = srv.all_socks;
 
-        printf("[server] waiting for activity\n");
+        if (CUSTOM_OUTPUT) {
+            printf("[server] waiting for activity\n");
+        }
 
         // we are going to use pselect as it will help to handle signal
         // interupts and if we ever pass timeouts to this we will not have to
@@ -226,11 +269,16 @@ int main(void) {
 
             if (s == srv.listen_sock) {
                 if (srv.active_clients == srv.max_conn - 1) {
-                    printf("[server] max server connections reached\n");
+                    if (CUSTOM_OUTPUT) {
+                        printf("[server] max server connections reached\n");
+                    }
+
                     continue;
                 }
 
-                printf("[server] accepting new connection\n");
+                if (CUSTOM_OUTPUT) {
+                    printf("[server] accepting new connection\n");
+                }
 
                 struct sockaddr client_addr;
                 socklen_t client_len = sizeof(client_addr);
@@ -242,7 +290,7 @@ int main(void) {
                     continue;
                 }
 
-                {
+                if (CUSTOM_OUTPUT) {
                     // this is more for logging and checking that address are
                     // they are supposed to be when sent back in a search
                     char ip[INET6_ADDRSTRLEN];
@@ -305,7 +353,9 @@ int main(void) {
                         fprintf(stderr, "[server] client %d error: %s\n", s, strerror(errno));
                     }
 
-                    printf("[server] client: %d closing\n", s);
+                    if (CUSTOM_OUTPUT) {
+                        printf("[server] client: %d closing\n", s);
+                    }
 
                     close(s);
 
@@ -319,9 +369,11 @@ int main(void) {
                     continue;
                 }
 
-                printf("[server] client %d data:\n", s);
+                if (CUSTOM_OUTPUT) {
+                    printf("[server] client %d data:\n", s);
 
-                print_buffer(recv_buffer, (size_t)read, VERBOSE);
+                    print_buffer(recv_buffer, (size_t)read, VERBOSE);
+                }
 
                 if (curr == NULL) {
                     printf("[server] failed to find client based on socket: %d\n", s);
@@ -339,14 +391,19 @@ int main(void) {
                     handle_search(&srv, curr, recv_buffer + 1, (size_t)read - 1);
                     break;
                 default:
-                    printf("[server] unknown command received from client: %u\n", recv_buffer[0]);
+                    if (CUSTOM_OUTPUT) {
+                        printf("[server] unknown command received from client: %u\n", recv_buffer[0]);
+                    }
+
                     break;
                 }
             }
         }
     }
 
-    printf("[server] closing active sockets\n");
+    if (CUSTOM_OUTPUT) {
+        printf("[server] closing active sockets\n");
+    }
 
     close(srv.listen_sock);
 
@@ -366,8 +423,10 @@ int main(void) {
 }
 
 void handle_signal(int signo) {
-    // dont do anything special, just log the signal
-    printf("[server] received signal %d\n", signo);
+    if (CUSTOM_OUTPUT) {
+        // dont do anything special, just log the signal
+        printf("[server] received signal %d\n", signo);
+    }
 }
 
 void clear_client_files(struct client *c) {
@@ -401,7 +460,9 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
     memcpy(&received_id, buffer, 4);
     received_id = ntohl(received_id);
 
-    printf("[server] handle_join: client joining registry. id: %u\n", received_id);
+    if (CUSTOM_OUTPUT) {
+        printf("[server] handle_join: client joining registry. id: %u\n", received_id);
+    }
 
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
@@ -412,17 +473,27 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
             // more for logging purposes
             if (server->clients[index].sock != client->sock) {
                 if (client->type == CLIENT_JOINED) {
-                    printf("[server] handle_join: client already registered\n");
+                    if (CUSTOM_OUTPUT) {
+                        printf("[server] handle_join: client already registered\n");
+                    }
                 } else {
-                    printf("[server] handle_join: WARNING client has been REGISTERED\n");
+                    if (CUSTOM_OUTPUT) {
+                        printf("[server] handle_join: WARNING client has been REGISTERED\n");
+                    }
                 }
             } else {
-                printf("[server] handle_join: client id already registered\n");
+                if (CUSTOM_OUTPUT) {
+                    printf("[server] handle_join: client id already registered\n");
+                }
             }
 
             break;
         } else {
-            printf("[server] handle_join: client id registered\n");
+            if (CUSTOM_OUTPUT) {
+                printf("[server] handle_join: client id registered\n");
+            } else {
+                printf("TEST] JOIN %u\n", received_id);
+            }
 
             client->id = received_id;
             client->type = CLIENT_JOINED;
@@ -443,7 +514,9 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         return;
     }
 
-    printf("[server] handle_publish: client publishing files\n");
+    if (CUSTOM_OUTPUT) {
+        printf("[server] handle_publish: client publishing files\n");
+    }
 
     size_t files_len = 0;
 
@@ -480,7 +553,9 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         bool found_null = false;
         size_t str_len = 0;
 
-        printf("[server] handle_publish: len? %lu\n", len);
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_publish: len? %lu\n", len);
+        }
 
         for (; str_len < len; ++str_len) {
             if (p[str_len] == 0) {
@@ -518,14 +593,18 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         files[allocated] = str;
         allocated += 1;
 
-        printf("[server] handle_publish: str: \"%s\" %lu\n", str, str_len);
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_publish: str: \"%s\" %lu\n", str, str_len);
+        }
 
         p += str_len + 1;
         len -= str_len + 1;
     }
 
     if (clean_up) {
-        printf("[server] handle_publish: cleaning up allocated strings\n");
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_publish: cleaning up allocated strings\n");
+        }
 
         for (size_t index = 0; index < allocated; ++index) {
             free(files[index]);
@@ -540,10 +619,20 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         client->files_len = files_len;
         client->files = files;
 
-        printf("[server] handle_publish: client published %u\n", client->id);
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_publish: client published %u\n", client->id);
 
-        for (size_t index = 0; index < client->files_len; ++index) {
-            printf("    %s\n", client->files[index]);
+            for (size_t index = 0; index < client->files_len; ++index) {
+                printf("    %s\n", client->files[index]);
+            }
+        } else {
+            printf("TEST] PUBLISH %lu", client->files_len);
+
+            for (size_t index = 0; index < client->files_len; ++index) {
+                printf(" %s", client->files[index]);
+            }
+
+            printf("\n");
         }
     }
 }
@@ -592,7 +681,9 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
         return;
     }
 
-    printf("[server] handle_search: client searching files\n");
+    if (CUSTOM_OUTPUT) {
+        printf("[server] handle_search: client searching files\n");
+    }
 
     uint8_t response[10] = {0};
 
@@ -625,18 +716,27 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
             continue;
         }
 
-        printf("[server] handle_search: checking client: %u\n", server->clients[index].id);
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_search: checking client: %u\n", server->clients[index].id);
+        }
 
         found = search_client_files(p, &server->clients[index]);
 
         if (found != NULL) {
-            printf("[server] handle_search: found file. id: %u\n", found->id);
+            if (CUSTOM_OUTPUT) {
+                printf("[server] handle_search: found file. id: %u\n", found->id);
+            }
+
             break;
         }
     }
 
     if (found == NULL) {
-        printf("[server] handle_search: failed to find file\n");
+        if (CUSTOM_OUTPUT) {
+            printf("[server] handle_search: failed to find file\n");
+        } else {
+            printf("TEST] SEARCH %s 0 0.0.0.0:0\n", p);
+        }
     } else {
         // since we do not care if the client connects with an v4 or v6
         // address we have to check to make sure that the client is v4
@@ -648,12 +748,24 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
             memcpy(response + 4, &v4->sin_addr.s_addr, 4);
             uint16_t port = htons(v4->sin_port);
             memcpy(response + 8, &port, 2);
+
+            if (!CUSTOM_OUTPUT) {
+                char ip[INET6_ADDRSTRLEN];
+
+                if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
+                    perror("[server] handle_search: failed to create ipv4 string from client\n");
+                } else {
+                    printf("TEST] SEARCH %s %u %s:%u\n", p, found->id, ip, v4->sin_port);
+                }
+            }
         } else {
             printf("[server] handle_search: client is using IPv6 address\n");
         }
     }
 
-    printf("[server] handle_search: sending response\n");
+    if (CUSTOM_OUTPUT) {
+        printf("[server] handle_search: sending response\n");
+    }
 
     if (send_bytes(client->sock, response, 10) != 0) {
         perror("[server] handle_search: error sending resposne");
@@ -711,18 +823,6 @@ void print_buffer(const uint8_t *buff, size_t length, uint8_t flags) {
     }
 }
 
-int find_max_fd(const fd_set *fs) {
-    int ret = 0;
-
-    for (int i = FD_SETSIZE - 1; i >= 0 && ret == 0; --i) {
-        if (FD_ISSET(i, fs)){
-            ret = i;
-        }
-    }
-
-    return ret;
-}
-
 int bind_and_listen(const char *service) {
     struct addrinfo hints;
     struct addrinfo *rp, *result;
@@ -747,8 +847,8 @@ int bind_and_listen(const char *service) {
             continue;
         }
 
-        if (!bind(s, rp->ai_addr, rp->ai_addrlen)) {
-            perror("[server] bind_and_listen: bind");
+        if (bind(s, rp->ai_addr, rp->ai_addrlen) == 0) {
+            //perror("[server] bind_and_listen: bind");
             break;
         }
 
