@@ -1,17 +1,18 @@
 // EECE-446-SP-2024
 // David Cathers & Maddison Webb
 
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netdb.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <signal.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/types.h>
-#include <string.h>
-#include <netdb.h>
-#include <errno.h>
-#include <stdbool.h>
+#include <unistd.h>
 
 #define SERVER_PORT "5432"
 #define MAX_LINE 256
@@ -20,37 +21,85 @@
 
 const uint8_t VERBOSE = 1;
 
+/**
+ * the three different states for a connected client
+ */
 enum client_state {
+    // the client as connected but join joined or registered
     CLIENT_UNKNOWN,
+    // the client has joined
     CLIENT_JOINED,
+    // the client has registered
     CLIENT_REGISTERED,
 };
 
+/**
+ * relevant data we want to store about a connected client
+ */
 struct client {
+    // determines if the current client struct is active or not
     bool active;
+    // client id provided by the client
     uint32_t id;
+    // type specified by client_state
     int type;
+    // socket file descriptor
     int sock;
+    // the socketaddr information of the connected client
     struct sockaddr addr;
+    // number of files current stored in the server
     size_t files_len;
+    // list of file names publish from the client
     char **files;
 };
 
+/**
+ * relevant state data we want to store for the server
+ */
 struct server {
+    // max number of active connections the server will handle
     size_t max_conn;
+    // max number of files that a client can publish to the server
     size_t max_files;
+    // total number of active clients
     size_t active_clients;
+    // list of client structs
     struct client *clients;
+    // server socket file descriptor
     int listen_sock;
+    // all currently connected sockets
     fd_set all_socks;
 };
 
+/**
+ * free the allocated strings stored for a client
+ */
 void clear_client_files(struct client *c);
+
+/**
+ * resets and frees allocated data for a client
+ */
 void clear_client(struct client *c);
 
+/**
+ * attempts to find the desired string for the given client if the string is
+ * found then it will return the pointer provided otherwise will return NULL
+ */
 struct client* search_client_files(const char* find, struct client* client);
+
+/**
+ * handles a join request sent by a client
+ */
 void handle_join(struct server *server, struct client *client, uint8_t *buffer, size_t len);
+
+/**
+ * handles a publish request sent by a client
+ */
 void handle_publish(struct server *server, struct client *client, uint8_t *buffer, size_t len);
+
+/**
+ * handles a search request sent by a client
+ */
 void handle_search(struct server *server, struct client *client, uint8_t *buffer, size_t len);
 
 /*
@@ -68,15 +117,27 @@ int bind_and_listen(const char *service);
  */
 int find_max_fd(const fd_set *fs);
 
+/**
+ * attempts to send all the desired bytes to the specified socket
+ */
 int send_bytes(int sock, const uint8_t *buf, size_t len);
+
+/**
+ * prints out the given buffer to stdout
+ */
 void print_buffer(const uint8_t *buf, size_t length, uint8_t flags);
 
+/**
+ * handles incoming signals sent from the system
+ */
 void handle_signal(int signo);
 
 int main(void) {
     // ------------------------------------------------------------------------
     // signal intercepts
     // ------------------------------------------------------------------------
+    // we are going to intercept SIGTERM and SIGINT so that we can do proper
+    // clean up before terminating the process
     struct sigaction sig;
     sig.sa_handler = handle_signal;
     sig.sa_flags = 0;
@@ -106,7 +167,7 @@ int main(void) {
 
     struct server srv;
     srv.max_conn = 5;
-    srv.max_files = 15;
+    srv.max_files = 10;
     srv.active_clients = 0;
     srv.clients = calloc(sizeof(struct client), srv.max_conn);
 
@@ -143,6 +204,9 @@ int main(void) {
 
         printf("[server] waiting for activity\n");
 
+        // we are going to use pselect as it will help to handle signal
+        // interupts and if we ever pass timeouts to this we will not have to
+        // worry about it changing our timeout struct
         int num_s = pselect(max_socket + 1, &call_set, NULL, NULL, NULL, &oldset);
 
         if (num_s < 0) {
@@ -178,7 +242,29 @@ int main(void) {
                     continue;
                 }
 
-                printf("[server] socket value: %d\n", client_sock);
+                {
+                    // this is more for logging and checking that address are
+                    // they are supposed to be when sent back in a search
+                    char ip[INET6_ADDRSTRLEN];
+
+                    if (client_addr.sa_family == AF_INET) {
+                        struct sockaddr_in *v4 = (struct sockaddr_in *)&client_addr;
+
+                        if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
+                            perror("[server] failed to create ipv4 string from client\n");
+                        } else {
+                            printf("[server] client addr: %s:%u\n", ip, v4->sin_port);
+                        }
+                    } else if (client_addr.sa_family == AF_INET6) {
+                        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&client_addr;
+
+                        if (inet_ntop(AF_INET6, &v6->sin6_addr, ip, INET6_ADDRSTRLEN) == NULL) {
+                            perror("[server] failed to create ipv6 string from client\n");
+                        } else {
+                            printf("[server] client addr: %s:%u\n", ip, v6->sin6_port);
+                        }
+                    }
+                }
 
                 FD_SET(client_sock, &srv.all_socks);
 
@@ -198,6 +284,8 @@ int main(void) {
             } else {
                 struct client *curr = NULL;
 
+                // if we do not find the client from the list of known clients
+                // then there is a logic bug somewhere
                 for (size_t index = 0; index < srv.max_conn; ++index) {
                     if (!srv.clients[index].active) {
                         continue;
@@ -208,6 +296,8 @@ int main(void) {
                     }
                 }
 
+                // the server currently makes the assumption that we will
+                // receive all the bytes necessary to handle the request
                 ssize_t read = recv(s, recv_buffer, BUFF_SIZE, 0);
 
                 if (read <= 0) {
@@ -258,6 +348,8 @@ int main(void) {
 
     printf("[server] closing active sockets\n");
 
+    close(srv.listen_sock);
+
     for (size_t index = 0; index < srv.max_conn; ++index) {
         if (!srv.clients[index].active) {
             continue;
@@ -274,6 +366,7 @@ int main(void) {
 }
 
 void handle_signal(int signo) {
+    // dont do anything special, just log the signal
     printf("[server] received signal %d\n", signo);
 }
 
@@ -283,6 +376,9 @@ void clear_client_files(struct client *c) {
     }
 
     free(c->files);
+
+    // avoid dangling pointers
+    c->files = NULL;
 }
 
 void clear_client(struct client *c) {
@@ -295,8 +391,8 @@ void clear_client(struct client *c) {
 }
 
 void handle_join(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
-    if (len < 4) {
-        printf("[server] handle_join: bytes received is less than 4\n");
+    if (len != 4) {
+        printf("[server] handle_join: bytes received is not 4\n");
         return;
     }
 
@@ -313,6 +409,7 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
         }
 
         if (server->clients[index].id == received_id) {
+            // more for logging purposes
             if (server->clients[index].sock != client->sock) {
                 if (client->type == CLIENT_JOINED) {
                     printf("[server] handle_join: client already registered\n");
@@ -363,13 +460,22 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         return;
     }
 
+    // flag for indicating if we need to cleanup due to an error or issue from
+    // the client
     bool clean_up = false;
+    // in the event that we have to clean up we will use this to keep track of
+    // what we have already allocated
     size_t allocated = 0;
+    // moving pointer for our current location in the buffer
     uint8_t *p = buffer + 4;
+    // pre-allocate the list and we will not re-allocate
     char **files = calloc(sizeof(char *), files_len);
 
     len -= 4;
 
+    // this is probably the portion that can have the most issue due to
+    // allocating strings and having to keep track of what bytes we are
+    // looking at
     for (size_t count = 0; count < files_len; ++count) {
         bool found_null = false;
         size_t str_len = 0;
@@ -427,6 +533,8 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
 
         free(files);
     } else {
+        // on the off chance that they have already published files to the 
+        // server we will attempt to clean up any previous files
         clear_client_files(client);
 
         client->files_len = files_len;
@@ -441,6 +549,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
 }
 
 struct client* search_client_files(const char *find, struct client *client) {
+    // if we had string lengths before hand this could probably be simpler
     for (size_t file_index = 0; file_index < client->files_len; ++file_index) {
         bool invalid = false;
         bool reached_end = false;
@@ -487,9 +596,7 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
 
     uint8_t response[10] = {0};
 
-    struct client *found = NULL;
-    char *p = (char *)buffer;
-
+    // check to make sure that the string we are given is a valid ASCII string
     for (size_t check = 0; check < len; ++check) {
         if (buffer[check] >= 128) {
             printf("[server] handle_search: file name contains non ASCII characters\n");
@@ -510,6 +617,9 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
         }
     }
 
+    struct client *found = NULL;
+    char *p = (char *)buffer;
+
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
             continue;
@@ -527,6 +637,20 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
 
     if (found == NULL) {
         printf("[server] handle_search: failed to find file\n");
+    } else {
+        // since we do not care if the client connects with an v4 or v6
+        // address we have to check to make sure that the client is v4
+        if (client->addr.sa_family == AF_INET) {
+            uint32_t id = htonl(client->id);
+            memcpy(response, &id, 4);
+
+            struct sockaddr_in *v4 = (struct sockaddr_in *)&client->addr;
+            memcpy(response + 4, &v4->sin_addr.s_addr, 4);
+            uint16_t port = htons(v4->sin_port);
+            memcpy(response + 8, &port, 2);
+        } else {
+            printf("[server] handle_search: client is using IPv6 address\n");
+        }
     }
 
     printf("[server] handle_search: sending response\n");
@@ -536,6 +660,7 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
     }
 }
 
+// pulled from the h1-counter
 int send_bytes(int sock, const uint8_t *buff, size_t len) {
     size_t total_sent = 0;
 
@@ -568,10 +693,14 @@ void print_buffer(const uint8_t *buff, size_t length, uint8_t flags) {
 
         for (size_t index = 0; index < length; ++index) {
             if (buff[index] == '\n') {
+                // if the characters is \n then we will escape and display it
                 printf(" \\n");
             } else if (buff[index] < 32) {
+                // vs trying to print the control characters we will just print
+                // CC for "control character"
                 printf(" CC");
             } else {
+                // a printable character
                 printf("  %c", buff[index]);
             }
         }
