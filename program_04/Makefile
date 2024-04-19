@@ -1,10 +1,10 @@
 # EECE 446 SP 2024
 # David Cathers & Maddison Webb
 
-server: server.c
-	gcc -Wall -Werror -o server server.c
+registry: registry.c
+	gcc -Wall -Werror -o registry registry.c
 
 clean:
-	rm -f server
+	rm -f registry
 
 .PHONY: clean

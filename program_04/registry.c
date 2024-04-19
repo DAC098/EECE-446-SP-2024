@@ -17,13 +17,19 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX_LINE 256
 #define MAX_PENDING 5
 #define BUFF_SIZE 2048
+
+#define IPLEN_AND_PORT 51
 
 #define TEST_OUTPUT true
 
 const uint8_t VERBOSE = 1;
+
+/**
+ * handles incoming signals sent from the system
+ */
+void handle_signal(int signo);
 
 /**
  * the three different states for a connected client
@@ -78,6 +84,8 @@ struct server {
     int listen_sock;
     // all currently connected sockets
     fd_set all_socks;
+    // the currently highest socket value
+    int max_socket;
     // output type
     int output_type;
     // output stream
@@ -100,10 +108,20 @@ void clear_client(struct client *c);
 void close_server_output(struct server* s);
 
 /**
+ * accepts a client for the server
+ */
+void server_accept(struct server* s);
+
+/**
  * attempts to find the desired string for the given client if the string is
  * found then it will return the pointer provided otherwise will return NULL
  */
 struct client* search_client_files(struct server* server, const char* find, struct client* client);
+
+/**
+ * handles incoming client data
+ */
+void handle_client(struct server* server, struct client* client);
 
 /**
  * handles a join request sent by a client
@@ -129,11 +147,20 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
  */
 int bind_and_listen(struct server *server, const char *service);
 
-/*
- * Return the maximum socket descriptor set in the argument.
- * This is a helper function that might be useful to you.
+/**
+ * retrieves the ipv4 address and port of the desired sockaddr_in
  */
-int find_max_fd(const fd_set *fs);
+char* get_ipv4_port(struct sockaddr_in* addr, char* str, size_t len, bool inc_port);
+
+/**
+ * retrives the ipv6 address and port of the desired sockaddr_in6
+ */
+char* get_ipv6_port(struct sockaddr_in6* addr, char* str, size_t len, bool inc_port);
+
+/**
+ * retrieves the ip address and port of the desired sockaddr
+ */
+char* get_ip_port(struct sockaddr* addr, char* str, size_t len, bool inc_port);
 
 /**
  * attempts to send all the desired bytes to the specified socket
@@ -146,11 +173,33 @@ int send_bytes(int sock, const uint8_t *buf, size_t len);
 void print_buffer(FILE* output, const uint8_t *buf, size_t length, uint8_t flags);
 
 /**
- * handles incoming signals sent from the system
+ * logs the given message to the specified output for the server
  */
-void handle_signal(int signo);
-
 void srv_log(struct server* server, const char* format, ...);
+
+/**
+ * logs the given message to the specified output for the server and will also
+ * print the "[INFO]" prefix
+ */
+void srv_info(struct server* server, const char* format, ...);
+
+/**
+ * logs the given message to the specified output for the server and will also
+ * print the "[WARN]" prefix
+ */
+void srv_warn(struct server* server, const char* format, ...);
+
+/**
+ * logs the given message to the specified output for the server and will also
+ * print the "[ERROR]" prefix
+ */
+void srv_error(struct server* server, const char* format, ...);
+
+/**
+ * logs the given message to the specified output for the server and will also
+ * print the "[DEBUG]" prefix
+ */
+void srv_debug(struct server* server, const char* format, ...);
 
 int main(int argc, char **argv) {
     char *listen_port = "5432";
@@ -201,12 +250,12 @@ int main(int argc, char **argv) {
     sigemptyset(&sig.sa_mask);
 
     if (sigaction(SIGTERM, &sig, NULL) != 0) {
-        perror("[server] failed setting SIGTERM handler");
+        perror("[ERROR] failed setting SIGTERM handler");
         return 1;
     }
 
     if (sigaction(SIGINT, &sig, NULL) != 0) {
-        perror("[server] failed setting SIGINT handler");
+        perror("[ERROR] failed setting SIGINT handler");
         return 1;
     }
 
@@ -234,14 +283,14 @@ int main(int argc, char **argv) {
         uint64_t ts = time(NULL);
 
         if (snprintf(filename, sizeof(filename), "%lu.txt", ts) < 0) {
-            perror("[server] failed to create filename for output file");
+            perror("[ERROR] failed to create filename for output file");
             return 1;
         }
 
         srv.output = fopen(filename, "w");
 
         if (srv.output == NULL) {
-            perror("[server] failed to open output file");
+            perror("[ERROR] failed to open output file");
             return 1;
         }
 
@@ -251,7 +300,7 @@ int main(int argc, char **argv) {
     srv.clients = calloc(sizeof(struct client), srv.max_conn);
 
     if (srv.clients == NULL) {
-        srv_log(&srv, "[server] failed allocation client connection data: %s\n", strerror(errno));
+        srv_error(&srv, "failed allocation client connection data: %s\n", strerror(errno));
 
         close_server_output(&srv);
 
@@ -269,13 +318,12 @@ int main(int argc, char **argv) {
     FD_ZERO(&srv.all_socks);
     FD_ZERO(&call_set);
 
-    srv_log(&srv, "[server] creating listening socket\n");
+    srv_info(&srv, "creating listening socket\n");
 
     srv.listen_sock = bind_and_listen(&srv, listen_port);
     FD_SET(srv.listen_sock, &srv.all_socks);
 
-    int max_socket = srv.listen_sock;
-    uint8_t recv_buffer[BUFF_SIZE];
+    srv.max_socket = srv.listen_sock;
 
     // ------------------------------------------------------------------------
     // main loop
@@ -283,86 +331,30 @@ int main(int argc, char **argv) {
     while (1) {
         call_set = srv.all_socks;
 
-        srv_log(&srv, "[server] waiting for activity\n");
+        srv_info(&srv, "waiting for activity\n");
 
         // we are going to use pselect as it will help to handle signal
         // interupts and if we ever pass timeouts to this we will not have to
         // worry about it changing our timeout struct
-        int num_s = pselect(max_socket + 1, &call_set, NULL, NULL, NULL, &oldset);
+        int num_s = pselect(srv.max_socket + 1, &call_set, NULL, NULL, NULL, &oldset);
 
         if (num_s < 0) {
             if (errno == EINTR) {
-                srv_log(&srv, "[server] signal interupt\n");
+                srv_info(&srv, "signal interupt\n");
                 break;
             } else {
-                srv_log(&srv, "[server] pselect: %s\n", strerror(errno));
+                srv_error(&srv, "pselect: %s\n", strerror(errno));
                 break;
             }
         }
 
-        for (int s = 3; s <= max_socket; ++s){
+        for (int s = 3; s <= srv.max_socket; ++s){
             if (!FD_ISSET(s, &call_set)) {
                 continue;
             }
 
             if (s == srv.listen_sock) {
-                if (srv.active_clients == srv.max_conn - 1) {
-                    srv_log(&srv, "[server] max server connections reached\n");
-
-                    continue;
-                }
-
-                srv_log(&srv, "[server] accepting new connection\n");
-
-                struct sockaddr client_addr;
-                socklen_t client_len = sizeof(client_addr);
-
-                int client_sock = accept(srv.listen_sock, &client_addr, &client_len);
-
-                if (client_sock == -1) {
-                    srv_log(&srv, "[server] failed to accept client: %s\n", strerror(errno));
-                    continue;
-                }
-
-                {
-                    // this is more for logging and checking that address are
-                    // they are supposed to be when sent back in a search
-                    char ip[INET6_ADDRSTRLEN];
-
-                    if (client_addr.sa_family == AF_INET) {
-                        struct sockaddr_in *v4 = (struct sockaddr_in *)&client_addr;
-
-                        if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                            srv_log(&srv, "[server] failed to create ipv4 string from client: %s\n", strerror(errno));
-                        } else {
-                            srv_log(&srv, "[server] client addr: %s:%u\n", ip, ntohs(v4->sin_port));
-                        }
-                    } else if (client_addr.sa_family == AF_INET6) {
-                        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&client_addr;
-
-                        if (inet_ntop(AF_INET6, &v6->sin6_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                            srv_log(&srv, "[server] failed to create ipv6 string from client: %s\n", strerror(errno));
-                        } else {
-                            srv_log(&srv, "[server] client addr: %s:%u\n", ip, ntohs(v6->sin6_port));
-                        }
-                    }
-                }
-
-                FD_SET(client_sock, &srv.all_socks);
-
-                if (client_sock > max_socket) {
-                    max_socket = client_sock;
-                }
-
-                for (size_t index = 0; index < srv.max_conn; ++index) {
-                    if (!srv.clients[index].active) {
-                        srv.clients[index].active = true;
-                        srv.clients[index].sock = client_sock;
-                        srv.clients[index].addr = client_addr;
-                        srv.active_clients += 1;
-                        break;
-                    }
-                }
+                server_accept(&srv);
             } else {
                 struct client *curr = NULL;
 
@@ -375,61 +367,20 @@ int main(int argc, char **argv) {
 
                     if (srv.clients[index].sock == s) {
                         curr = &srv.clients[index];
+                        break;
                     }
                 }
-
-                // the server currently makes the assumption that we will
-                // receive all the bytes necessary to handle the request
-                ssize_t read = recv(s, recv_buffer, BUFF_SIZE, 0);
-
-                if (read <= 0) {
-                    if (read == -1) {
-                        srv_log(&srv, "[server] client %d error: %s\n", s, strerror(errno));
-                    }
-
-                    srv_log(&srv, "[server] client: %d closing\n", s);
-
-                    close(s);
-
-                    FD_CLR(s, &srv.all_socks);
-
-                    if (curr != NULL) {
-                        clear_client(curr);
-                        srv.active_clients -= 1;
-                    }
-
-                    continue;
-                }
-
-                srv_log(&srv, "[server] client %d data:\n", s);
-
-                print_buffer(srv.output, recv_buffer, (size_t)read, VERBOSE);
 
                 if (curr == NULL) {
-                    srv_log(&srv, "[server] failed to find client based on socket: %d\n", s);
-                    continue;
-                }
-
-                switch (recv_buffer[0]) {
-                case 0: // JOIN
-                    handle_join(&srv, curr, recv_buffer + 1, (size_t)read - 1);
-                    break;
-                case 1: // PUBLISH
-                    handle_publish(&srv, curr, recv_buffer + 1, (size_t)read - 1);
-                    break;
-                case 2: // SEARCH
-                    handle_search(&srv, curr, recv_buffer + 1, (size_t)read - 1);
-                    break;
-                default:
-                    srv_log(&srv, "[server] unknown command received from client: %u\n", recv_buffer[0]);
-
-                    break;
+                    srv_error(&srv, "failed to find client based on socket: %d\n", s);
+                } else {
+                    handle_client(&srv, curr);
                 }
             }
         }
     }
 
-    srv_log(&srv, "[server] closing active sockets\n");
+    srv_info(&srv, "closing active sockets\n");
 
     close(srv.listen_sock);
 
@@ -457,11 +408,71 @@ void srv_log(struct server* server, const char* format, ...) {
 
     vfprintf(server->output, format, ap);
 
+    va_end(ap);
+
     if (server->output_type == FILE_LOG) {
         fflush(server->output);
     }
+}
+
+void srv_info(struct server* server, const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    fprintf(server->output, "[INFO] ");
+    vfprintf(server->output, format, ap);
 
     va_end(ap);
+
+    if (server->output_type == FILE_LOG) {
+        fflush(server->output);
+    }
+}
+
+void srv_warn(struct server* server, const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    fprintf(server->output, "[WARN] ");
+    vfprintf(server->output, format, ap);
+
+    va_end(ap);
+
+    if (server->output_type == FILE_LOG) {
+        fflush(server->output);
+    }
+}
+
+void srv_error(struct server* server, const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    fprintf(server->output, "[ERROR] ");
+    vfprintf(server->output, format, ap);
+
+    va_end(ap);
+
+    if (server->output_type == FILE_LOG) {
+        fflush(server->output);
+    }
+}
+
+void srv_debug(struct server* server, const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    fprintf(server->output, "[DEBUG] ");
+    vfprintf(server->output, format, ap);
+
+    va_end(ap);
+
+    if (server->output_type == FILE_LOG) {
+        fflush(server->output);
+    }
 }
 
 void handle_signal(int signo) {
@@ -501,9 +512,103 @@ void close_server_output(struct server* s) {
     }
 }
 
+void server_accept(struct server* server) {
+    srv_info(server, "accepting new connection\n");
+
+    struct sockaddr client_addr;
+    socklen_t client_len = sizeof(client_addr);
+
+    int client_sock = accept(server->listen_sock, &client_addr, &client_len);
+
+    if (client_sock == -1) {
+        srv_error(server, "failed to accept client: %s\n", strerror(errno));
+        return;
+    }
+
+    if (server->active_clients == server->max_conn - 1) {
+        srv_warn(server, "max server connections reached\n");
+
+        if (close(client_sock) != 0) {
+            srv_error(server, "error closing connected socket: %s\n", strerror(errno));
+            return;
+        }
+    }
+
+    {
+        // this is more for logging and checking that address are
+        // they are supposed to be when sent back in a search
+        char ip[IPLEN_AND_PORT];
+
+        if (get_ip_port(&client_addr, ip, IPLEN_AND_PORT, true) == NULL) {
+            srv_error(server, "failed to create ip string from client: %s\n", strerror(errno));
+        } else {
+            srv_info(server, "client addr: %s\n", ip);
+        }
+    }
+
+    FD_SET(client_sock, &server->all_socks);
+
+    if (client_sock > server->max_socket) {
+        server->max_socket = client_sock;
+    }
+
+    for (size_t index = 0; index < server->max_conn; ++index) {
+        if (!server->clients[index].active) {
+            server->clients[index].active = true;
+            server->clients[index].sock = client_sock;
+            server->clients[index].addr = client_addr;
+            server->active_clients += 1;
+            break;
+        }
+    }
+}
+
+void handle_client(struct server* server, struct client* client) {
+    uint8_t recv_buffer[BUFF_SIZE];
+    // the server currently makes the assumption that we will
+    // receive all the bytes necessary to handle the request
+    ssize_t read = recv(client->sock, recv_buffer, BUFF_SIZE, 0);
+
+    if (read <= 0) {
+        if (read == -1) {
+            srv_error(server, "client %d error: %s\n", client->sock, strerror(errno));
+        }
+
+        srv_info(server, "client: %d closing\n", client->sock);
+
+        close(client->sock);
+
+        FD_CLR(client->sock, &server->all_socks);
+
+        clear_client(client);
+        server->active_clients -= 1;
+
+        return;
+    }
+
+    srv_debug(server, "client %d data:\n", client->sock);
+
+    print_buffer(server->output, recv_buffer, (size_t)read, VERBOSE);
+
+    switch (recv_buffer[0]) {
+    case 0: // JOIN
+        handle_join(server, client, recv_buffer + 1, (size_t)read - 1);
+        break;
+    case 1: // PUBLISH
+        handle_publish(server, client, recv_buffer + 1, (size_t)read - 1);
+        break;
+    case 2: // SEARCH
+        handle_search(server, client, recv_buffer + 1, (size_t)read - 1);
+        break;
+    default:
+        srv_warn(server, "unknown command received from client: %u\n", recv_buffer[0]);
+        break;
+    }
+}
+
 void handle_join(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (len != 4) {
-        srv_log(server, "[server] handle_join: bytes received is not 4\n");
+        srv_warn(server, "handle_join: bytes received is not 4\n");
         return;
     }
 
@@ -512,7 +617,7 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
     memcpy(&received_id, buffer, 4);
     received_id = ntohl(received_id);
 
-    srv_log(server, "[server] handle_join: client joining registry. id: %u\n", received_id);
+    srv_info(server, "handle_join: client joining registry. id: %u\n", received_id);
 
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
@@ -523,37 +628,24 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
             // more for logging purposes
             if (server->clients[index].sock != client->sock) {
                 if (client->type == CLIENT_JOINED) {
-                    srv_log(server, "[server] handle_join: client already registered\n");
+                    srv_warn(server, "handle_join: client already registered\n");
                 } else {
-                    srv_log(server, "[server] handle_join: WARNING client has been REGISTERED\n");
+                    srv_warn(server, "handle_join: client has been REGISTERED\n");
                 }
             } else {
-                srv_log(server, "[server] handle_join: client id already registered\n");
+                srv_warn(server, "handle_join: client id already registered\n");
             }
 
             break;
         } else {
 
-            char ip[INET6_ADDRSTRLEN];
+            char ip[IPLEN_AND_PORT];
 
-            if (client->addr.sa_family == AF_INET) {
-                struct sockaddr_in *v4 = (struct sockaddr_in *)&client->addr;
-
-                if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                    srv_log(server, "[server] handle_join: failed to create ipv4 string from client: %s\n", strerror(errno));
-                } else {
-                    srv_log(server, "[server] handle_join: client addr: %s:%u -> %u\n", ip, ntohs(v4->sin_port), received_id);
-                }
-            } else if (client->addr.sa_family == AF_INET6) {
-                struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&client->addr;
-
-                if (inet_ntop(AF_INET6, &v6->sin6_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                    srv_log(server, "[server] handle_join: failed to create ipv6 string from client: %s\n", strerror(errno));
-                } else {
-                    srv_log(server, "[server] handle_join: client addr: %s:%u -> %u\n", ip, ntohs(v6->sin6_port), received_id);
-                }
+            if (get_ip_port(&client->addr, ip, IPLEN_AND_PORT, true) == NULL) {
+                srv_error(server, "handle_join: failed to create ip string from client: %s\n", strerror(errno));
+                srv_info(server, "handle_join: client registered %u\n", received_id);
             } else {
-                srv_log(server, "[server] handle_join: client id registered\n");
+                srv_info(server, "handle_join: client addr: %s -> %u\n", ip, received_id);
             }
 
             if (TEST_OUTPUT) {
@@ -570,21 +662,21 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
 
 void handle_publish(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (client->type == CLIENT_UNKNOWN) {
-        srv_log(server, "[server] handle_publish: client has not joined or registered\n");
+        srv_warn(server, "handle_publish: client has not joined or registered\n");
         return;
     }
 
     if (len >= 1199) {
-        srv_log(server, "[server] handle_publish: bytes received is greater than 1200\n");
+        srv_warn(server, "handle_publish: bytes received is greater than 1200\n");
         return;
     }
 
-    srv_log(server, "[server] handle_publish: client publishing files\n");
+    srv_info(server, "handle_publish: client %u publishing files\n", client->id);
 
     size_t files_len = 0;
 
     if (len < 4) {
-        srv_log(server, "[server] handle_publish: too few bytes received\n");
+        srv_warn(server, "handle_publish: too few bytes received\n");
         return;
     }
 
@@ -592,7 +684,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
     files_len = ntohl(files_len);
 
     if (files_len > server->max_files) {
-        srv_log(server, "[server] handle_publish: number of files is greater than max. given: %lu\n", files_len);
+        srv_warn(server, "handle_publish: number of files is greater than max. given: %lu\n", files_len);
         return;
     }
 
@@ -616,14 +708,14 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         bool found_null = false;
         size_t str_len = 0;
 
-        //srv_log(server, "[server] handle_publish: len? %lu\n", len);
+        //srv_debug(server, "handle_publish: len? %lu\n", len);
 
         for (; str_len < len; ++str_len) {
             if (p[str_len] == 0) {
                 found_null = true;
                 break;
             } else if (p[str_len] >= 128) {
-                //srv_log(server, "[server] handle_publish: invalid ASCII character received from client\n");
+                srv_warn(server, "handle_publish: invalid ASCII character received from client\n");
 
                 clean_up = true;
 
@@ -632,7 +724,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         }
 
         if (!found_null) {
-            srv_log(server, "[server] handle_publish: non null terminated string given by client\n");
+            srv_warn(server, "handle_publish: non null terminated string given by client\n");
 
             clean_up = true;
 
@@ -642,7 +734,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         char *str = calloc(sizeof(char), str_len);
 
         if (str == NULL) {
-            srv_log(server, "[server] handle_publish: failed allocating string\n");
+            srv_error(server, "handle_publish: failed allocating string\n");
 
             clean_up = true;
 
@@ -654,14 +746,14 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         files[allocated] = str;
         allocated += 1;
 
-        srv_log(server, "[server] handle_publish: str: \"%s\" %lu\n", str, str_len);
+        srv_info(server, "handle_publish: str: \"%s\" %lu\n", str, str_len);
 
         p += str_len + 1;
         len -= str_len + 1;
     }
 
     if (clean_up) {
-        srv_log(server, "[server] handle_publish: cleaning up allocated strings\n");
+        srv_log(server, "handle_publish: cleaning up allocated strings\n");
 
         for (size_t index = 0; index < allocated; ++index) {
             free(files[index]);
@@ -676,7 +768,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         client->files_len = files_len;
         client->files = files;
 
-        srv_log(server, "[server] handle_publish: client published %u\n", client->id);
+        srv_info(server, "handle_publish: published files\n");
 
         for (size_t index = 0; index < client->files_len; ++index) {
             srv_log(server, "    %s\n", client->files[index]);
@@ -701,7 +793,7 @@ struct client* search_client_files(struct server* server, const char *find, stru
         bool reached_end = false;
         size_t index = 0;
 
-        srv_log(server, "[server]     checking \"%s\"\n", client->files[file_index]);
+        srv_debug(server, "     checking \"%s\"\n", client->files[file_index]);
 
         while (1) {
             if (client->files[file_index][index] == 0) {
@@ -731,12 +823,12 @@ struct client* search_client_files(struct server* server, const char *find, stru
 
 void handle_search(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (client->type == CLIENT_UNKNOWN) {
-        srv_log(server, "[server] handle_publish: client has not joined or registered\n");
+        srv_warn(server, "handle_publish: client has not joined or registered\n");
         return;
     }
 
     if (len >= 100) {
-        srv_log(server, "[server] handle_search: received too many bytes from client\n");
+        srv_warn(server, "handle_search: received too many bytes from client\n");
         return;
     }
 
@@ -745,20 +837,20 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
     // check to make sure that the string we are given is a valid ASCII string
     for (size_t check = 0; check < len; ++check) {
         if (buffer[check] >= 128) {
-            srv_log(server, "[server] handle_search: file name contains non ASCII characters\n");
+            srv_warn(server, "handle_search: file name contains non ASCII characters\n");
 
             if (send_bytes(client->sock, response, 10) != 0) {
-                srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
+                srv_error(server, "handle_search: error sending resposne: %s\n", strerror(errno));
                 return;
             }
         }
     }
 
     if (buffer[len - 1] != 0) {
-        srv_log(server, "[server] handle_search: non null terminated string from client\n");
+        srv_warn(server, "handle_search: non null terminated string from client\n");
 
         if (send_bytes(client->sock, response, 10) != 0) {
-            srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
+            srv_error(server, "handle_search: error sending resposne: %s\n", strerror(errno));
             return;
         }
     }
@@ -766,26 +858,26 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
     struct client *found = NULL;
     char *p = (char *)buffer;
 
-    srv_log(server, "[server] handle_search: client %u searching files for %s\n", client->id, p);
+    srv_info(server, "handle_search: client %u searching files for %s\n", client->id, p);
 
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
             continue;
         }
 
-        srv_log(server, "[server] handle_search: checking client: %u\n", server->clients[index].id);
+        srv_debug(server, "handle_search: checking client: %u\n", server->clients[index].id);
 
         found = search_client_files(server, p, &server->clients[index]);
 
         if (found != NULL) {
-            srv_log(server, "[server] handle_search: found file. id: %u\n", found->id);
+            srv_info(server, "handle_search: found file. id: %u\n", found->id);
 
             break;
         }
     }
 
     if (found == NULL) {
-        srv_log(server, "[server] handle_search: failed to find file\n");
+        srv_info(server, "handle_search: failed to find file\n");
 
         if (TEST_OUTPUT) {
             printf("TEST] SEARCH %s 0 0.0.0.0:0\n", p);
@@ -802,23 +894,85 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
             memcpy(response + 8, &v4->sin_port, 2);
 
             if (TEST_OUTPUT) {
-                char ip[INET6_ADDRSTRLEN];
+                char ip[IPLEN_AND_PORT];
 
-                if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                    srv_log(server, "[server] handle_search: failed to create ipv4 string from client: %s\n", strerror(errno));
+                if (get_ipv4_port(v4, ip, IPLEN_AND_PORT, true) == NULL) {
+                    srv_error(server, "handle_search: failed to create ipv4 string from client: %s\n", strerror(errno));
                 } else {
-                    printf("TEST] SEARCH %s %u %s:%u\n", p, found->id, ip, ntohs(v4->sin_port));
+                    printf("TEST] SEARCH %s %u %s\n", p, found->id, ip);
                 }
             }
         } else {
-            srv_log(server, "[server] handle_search: client is using non IPv4 address\n");
+            srv_warn(server, "handle_search: client is using non IPv4 address\n");
         }
     }
 
-    srv_log(server, "[server] handle_search: sending response\n");
+    srv_info(server, "handle_search: sending response\n");
 
     if (send_bytes(client->sock, response, 10) != 0) {
-        srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
+        srv_error(server, "handle_search: error sending resposne: %s\n", strerror(errno));
+    }
+}
+
+char* get_ipv4_port(struct sockaddr_in* addr, char* str, size_t len, bool inc_port) {
+    if (inet_ntop(AF_INET, &addr->sin_addr, str, len) == NULL) {
+        return NULL;
+    }
+
+    if (inc_port) {
+        // short cut this since the minimum size of an IPv4 address is 7
+        // characters
+        size_t wrote = strlen(str + 7) + 7;
+
+        if (wrote + 6 > len) {
+            return str;
+        }
+
+        if (snprintf(str + wrote, len - wrote, ":%u", ntohs(addr->sin_port)) < 0) {
+            return NULL;
+        } else {
+            return str;
+        }
+    } else {
+        return str;
+    }
+}
+
+char* get_ipv6_port(struct sockaddr_in6* addr, char* str, size_t len, bool inc_port) {
+    if (inet_ntop(AF_INET6, &addr->sin6_addr, str, len) == NULL) {
+        return NULL;
+    }
+
+    if (inc_port) {
+        // the address could be between 3 and 45 characters for IPv6 so
+        // there is not much of a gain here
+        size_t wrote = strlen(str + 3) + 3;
+
+        if (wrote + 6 > len) {
+            return str;
+        }
+
+        if (snprintf(str + wrote, len - wrote, ":%u", ntohs(addr->sin6_port)) < 0) {
+            return NULL;
+        } else {
+            return str;
+        }
+    } else {
+        return str;
+    }
+}
+
+char* get_ip_port(struct sockaddr* addr, char* str, size_t len, bool inc_port) {
+    if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)addr;
+
+        return get_ipv4_port(v4, str, len, inc_port);
+    } else if (addr->sa_family == AF_INET6) {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)addr;
+
+        return get_ipv6_port(v6, str, len ,inc_port);
+    } else {
+        return NULL;
     }
 }
 
@@ -891,7 +1045,7 @@ int bind_and_listen(struct server* server, const char *service) {
 
     /* Get local address info */
     if ((s = getaddrinfo(NULL, service, &hints, &result)) != 0) {
-        srv_log(server, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(s));
+        srv_error(server, "bind_and_listen: getaddrinfo: %s\n", gai_strerror(s));
         return -1;
     }
 
@@ -914,7 +1068,7 @@ int bind_and_listen(struct server* server, const char *service) {
     }
 
     if (listen(s, MAX_PENDING) == -1) {
-        srv_log(server, "[server] bind_and_listen: listen: %s\n", strerror(errno));
+        srv_error(server, "bind_and_listen: failed to listen on socket: %s\n", strerror(errno));
 
         close(s);
 
