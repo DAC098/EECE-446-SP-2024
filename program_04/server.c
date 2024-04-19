@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <netdb.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -13,13 +14,14 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAX_LINE 256
 #define MAX_PENDING 5
 #define BUFF_SIZE 2048
 
-#define CUSTOM_OUTPUT false
+#define TEST_OUTPUT true
 
 const uint8_t VERBOSE = 1;
 
@@ -55,6 +57,11 @@ struct client {
     char **files;
 };
 
+enum server_output {
+    STDOUT_LOG,
+    FILE_LOG,
+};
+
 /**
  * relevant state data we want to store for the server
  */
@@ -71,6 +78,10 @@ struct server {
     int listen_sock;
     // all currently connected sockets
     fd_set all_socks;
+    // output type
+    int output_type;
+    // output stream
+    FILE* output;
 };
 
 /**
@@ -84,10 +95,15 @@ void clear_client_files(struct client *c);
 void clear_client(struct client *c);
 
 /**
+ * closes the server output if necessary
+ */
+void close_server_output(struct server* s);
+
+/**
  * attempts to find the desired string for the given client if the string is
  * found then it will return the pointer provided otherwise will return NULL
  */
-struct client* search_client_files(const char* find, struct client* client);
+struct client* search_client_files(struct server* server, const char* find, struct client* client);
 
 /**
  * handles a join request sent by a client
@@ -111,7 +127,7 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
  * Returns a passively opened socket or -1 on error. Caller is responsible for calling
  * accept and closing the socket.
  */
-int bind_and_listen(const char *service);
+int bind_and_listen(struct server *server, const char *service);
 
 /*
  * Return the maximum socket descriptor set in the argument.
@@ -127,12 +143,14 @@ int send_bytes(int sock, const uint8_t *buf, size_t len);
 /**
  * prints out the given buffer to stdout
  */
-void print_buffer(const uint8_t *buf, size_t length, uint8_t flags);
+void print_buffer(FILE* output, const uint8_t *buf, size_t length, uint8_t flags);
 
 /**
  * handles incoming signals sent from the system
  */
 void handle_signal(int signo);
+
+void srv_log(struct server* server, const char* format, ...);
 
 int main(int argc, char **argv) {
     char *listen_port = "5432";
@@ -205,13 +223,37 @@ int main(int argc, char **argv) {
     fd_set call_set;
 
     struct server srv;
-    srv.max_conn = 5;
+    srv.max_conn = 50;
     srv.max_files = 10;
     srv.active_clients = 0;
+    srv.output_type = STDOUT_LOG;
+    srv.output = stdout;
+
+    if (TEST_OUTPUT) {
+        char filename[1024];
+        uint64_t ts = time(NULL);
+
+        if (snprintf(filename, sizeof(filename), "%lu.txt", ts) < 0) {
+            perror("[server] failed to create filename for output file");
+            return 1;
+        }
+
+        srv.output = fopen(filename, "w");
+
+        if (srv.output == NULL) {
+            perror("[server] failed to open output file");
+            return 1;
+        }
+
+        srv.output_type = FILE_LOG;
+    }
+
     srv.clients = calloc(sizeof(struct client), srv.max_conn);
 
     if (srv.clients == NULL) {
-        perror("[server] failed allocation client connection data");
+        srv_log(&srv, "[server] failed allocation client connection data: %s\n", strerror(errno));
+
+        close_server_output(&srv);
 
         return 1;
     }
@@ -227,11 +269,9 @@ int main(int argc, char **argv) {
     FD_ZERO(&srv.all_socks);
     FD_ZERO(&call_set);
 
-    if (CUSTOM_OUTPUT) {
-        printf("[server] creating listening socket\n");
-    }
+    srv_log(&srv, "[server] creating listening socket\n");
 
-    srv.listen_sock = bind_and_listen(listen_port);
+    srv.listen_sock = bind_and_listen(&srv, listen_port);
     FD_SET(srv.listen_sock, &srv.all_socks);
 
     int max_socket = srv.listen_sock;
@@ -243,9 +283,7 @@ int main(int argc, char **argv) {
     while (1) {
         call_set = srv.all_socks;
 
-        if (CUSTOM_OUTPUT) {
-            printf("[server] waiting for activity\n");
-        }
+        srv_log(&srv, "[server] waiting for activity\n");
 
         // we are going to use pselect as it will help to handle signal
         // interupts and if we ever pass timeouts to this we will not have to
@@ -254,10 +292,10 @@ int main(int argc, char **argv) {
 
         if (num_s < 0) {
             if (errno == EINTR) {
-                printf("[server] signal interupt\n");
+                srv_log(&srv, "[server] signal interupt\n");
                 break;
             } else {
-                perror("[server] pselect:");
+                srv_log(&srv, "[server] pselect: %s\n", strerror(errno));
                 break;
             }
         }
@@ -269,16 +307,12 @@ int main(int argc, char **argv) {
 
             if (s == srv.listen_sock) {
                 if (srv.active_clients == srv.max_conn - 1) {
-                    if (CUSTOM_OUTPUT) {
-                        printf("[server] max server connections reached\n");
-                    }
+                    srv_log(&srv, "[server] max server connections reached\n");
 
                     continue;
                 }
 
-                if (CUSTOM_OUTPUT) {
-                    printf("[server] accepting new connection\n");
-                }
+                srv_log(&srv, "[server] accepting new connection\n");
 
                 struct sockaddr client_addr;
                 socklen_t client_len = sizeof(client_addr);
@@ -286,11 +320,11 @@ int main(int argc, char **argv) {
                 int client_sock = accept(srv.listen_sock, &client_addr, &client_len);
 
                 if (client_sock == -1) {
-                    perror("[server] failed to accept client");
+                    srv_log(&srv, "[server] failed to accept client: %s\n", strerror(errno));
                     continue;
                 }
 
-                if (CUSTOM_OUTPUT) {
+                {
                     // this is more for logging and checking that address are
                     // they are supposed to be when sent back in a search
                     char ip[INET6_ADDRSTRLEN];
@@ -299,17 +333,17 @@ int main(int argc, char **argv) {
                         struct sockaddr_in *v4 = (struct sockaddr_in *)&client_addr;
 
                         if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                            perror("[server] failed to create ipv4 string from client\n");
+                            srv_log(&srv, "[server] failed to create ipv4 string from client: %s\n", strerror(errno));
                         } else {
-                            printf("[server] client addr: %s:%u\n", ip, v4->sin_port);
+                            srv_log(&srv, "[server] client addr: %s:%u\n", ip, ntohs(v4->sin_port));
                         }
                     } else if (client_addr.sa_family == AF_INET6) {
                         struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&client_addr;
 
                         if (inet_ntop(AF_INET6, &v6->sin6_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                            perror("[server] failed to create ipv6 string from client\n");
+                            srv_log(&srv, "[server] failed to create ipv6 string from client: %s\n", strerror(errno));
                         } else {
-                            printf("[server] client addr: %s:%u\n", ip, v6->sin6_port);
+                            srv_log(&srv, "[server] client addr: %s:%u\n", ip, ntohs(v6->sin6_port));
                         }
                     }
                 }
@@ -350,12 +384,10 @@ int main(int argc, char **argv) {
 
                 if (read <= 0) {
                     if (read == -1) {
-                        fprintf(stderr, "[server] client %d error: %s\n", s, strerror(errno));
+                        srv_log(&srv, "[server] client %d error: %s\n", s, strerror(errno));
                     }
 
-                    if (CUSTOM_OUTPUT) {
-                        printf("[server] client: %d closing\n", s);
-                    }
+                    srv_log(&srv, "[server] client: %d closing\n", s);
 
                     close(s);
 
@@ -369,14 +401,12 @@ int main(int argc, char **argv) {
                     continue;
                 }
 
-                if (CUSTOM_OUTPUT) {
-                    printf("[server] client %d data:\n", s);
+                srv_log(&srv, "[server] client %d data:\n", s);
 
-                    print_buffer(recv_buffer, (size_t)read, VERBOSE);
-                }
+                print_buffer(srv.output, recv_buffer, (size_t)read, VERBOSE);
 
                 if (curr == NULL) {
-                    printf("[server] failed to find client based on socket: %d\n", s);
+                    srv_log(&srv, "[server] failed to find client based on socket: %d\n", s);
                     continue;
                 }
 
@@ -391,9 +421,7 @@ int main(int argc, char **argv) {
                     handle_search(&srv, curr, recv_buffer + 1, (size_t)read - 1);
                     break;
                 default:
-                    if (CUSTOM_OUTPUT) {
-                        printf("[server] unknown command received from client: %u\n", recv_buffer[0]);
-                    }
+                    srv_log(&srv, "[server] unknown command received from client: %u\n", recv_buffer[0]);
 
                     break;
                 }
@@ -401,9 +429,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (CUSTOM_OUTPUT) {
-        printf("[server] closing active sockets\n");
-    }
+    srv_log(&srv, "[server] closing active sockets\n");
 
     close(srv.listen_sock);
 
@@ -419,11 +445,27 @@ int main(int argc, char **argv) {
 
     free(srv.clients);
 
+    close_server_output(&srv);
+
     return 0;
 }
 
+void srv_log(struct server* server, const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+
+    vfprintf(server->output, format, ap);
+
+    if (server->output_type == FILE_LOG) {
+        fflush(server->output);
+    }
+
+    va_end(ap);
+}
+
 void handle_signal(int signo) {
-    if (CUSTOM_OUTPUT) {
+    if (!TEST_OUTPUT) {
         // dont do anything special, just log the signal
         printf("[server] received signal %d\n", signo);
     }
@@ -449,9 +491,19 @@ void clear_client(struct client *c) {
     c->files_len = 0;
 }
 
+void close_server_output(struct server* s) {
+    if (s->output_type != FILE_LOG) {
+        return;
+    }
+
+    if (fclose(s->output) != 0) {
+        perror("[server] failed to close output file");
+    }
+}
+
 void handle_join(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (len != 4) {
-        printf("[server] handle_join: bytes received is not 4\n");
+        srv_log(server, "[server] handle_join: bytes received is not 4\n");
         return;
     }
 
@@ -460,9 +512,7 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
     memcpy(&received_id, buffer, 4);
     received_id = ntohl(received_id);
 
-    if (CUSTOM_OUTPUT) {
-        printf("[server] handle_join: client joining registry. id: %u\n", received_id);
-    }
+    srv_log(server, "[server] handle_join: client joining registry. id: %u\n", received_id);
 
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
@@ -473,25 +523,40 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
             // more for logging purposes
             if (server->clients[index].sock != client->sock) {
                 if (client->type == CLIENT_JOINED) {
-                    if (CUSTOM_OUTPUT) {
-                        printf("[server] handle_join: client already registered\n");
-                    }
+                    srv_log(server, "[server] handle_join: client already registered\n");
                 } else {
-                    if (CUSTOM_OUTPUT) {
-                        printf("[server] handle_join: WARNING client has been REGISTERED\n");
-                    }
+                    srv_log(server, "[server] handle_join: WARNING client has been REGISTERED\n");
                 }
             } else {
-                if (CUSTOM_OUTPUT) {
-                    printf("[server] handle_join: client id already registered\n");
-                }
+                srv_log(server, "[server] handle_join: client id already registered\n");
             }
 
             break;
         } else {
-            if (CUSTOM_OUTPUT) {
-                printf("[server] handle_join: client id registered\n");
+
+            char ip[INET6_ADDRSTRLEN];
+
+            if (client->addr.sa_family == AF_INET) {
+                struct sockaddr_in *v4 = (struct sockaddr_in *)&client->addr;
+
+                if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
+                    srv_log(server, "[server] handle_join: failed to create ipv4 string from client: %s\n", strerror(errno));
+                } else {
+                    srv_log(server, "[server] handle_join: client addr: %s:%u -> %u\n", ip, ntohs(v4->sin_port), received_id);
+                }
+            } else if (client->addr.sa_family == AF_INET6) {
+                struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&client->addr;
+
+                if (inet_ntop(AF_INET6, &v6->sin6_addr, ip, INET6_ADDRSTRLEN) == NULL) {
+                    srv_log(server, "[server] handle_join: failed to create ipv6 string from client: %s\n", strerror(errno));
+                } else {
+                    srv_log(server, "[server] handle_join: client addr: %s:%u -> %u\n", ip, ntohs(v6->sin6_port), received_id);
+                }
             } else {
+                srv_log(server, "[server] handle_join: client id registered\n");
+            }
+
+            if (TEST_OUTPUT) {
                 printf("TEST] JOIN %u\n", received_id);
             }
 
@@ -505,23 +570,21 @@ void handle_join(struct server *server, struct client *client, uint8_t *buffer, 
 
 void handle_publish(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (client->type == CLIENT_UNKNOWN) {
-        printf("[server] handle_publish: client has not joined or registered\n");
+        srv_log(server, "[server] handle_publish: client has not joined or registered\n");
         return;
     }
 
     if (len >= 1199) {
-        printf("[server] handle_publish: bytes received is greater than 1200\n");
+        srv_log(server, "[server] handle_publish: bytes received is greater than 1200\n");
         return;
     }
 
-    if (CUSTOM_OUTPUT) {
-        printf("[server] handle_publish: client publishing files\n");
-    }
+    srv_log(server, "[server] handle_publish: client publishing files\n");
 
     size_t files_len = 0;
 
     if (len < 4) {
-        printf("[server] handle_publish: too few bytes received\n");
+        srv_log(server, "[server] handle_publish: too few bytes received\n");
         return;
     }
 
@@ -529,7 +592,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
     files_len = ntohl(files_len);
 
     if (files_len > server->max_files) {
-        printf("[server] handle_publish: number of files is greater than max. given: %lu\n", files_len);
+        srv_log(server, "[server] handle_publish: number of files is greater than max. given: %lu\n", files_len);
         return;
     }
 
@@ -553,16 +616,14 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         bool found_null = false;
         size_t str_len = 0;
 
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_publish: len? %lu\n", len);
-        }
+        //srv_log(server, "[server] handle_publish: len? %lu\n", len);
 
         for (; str_len < len; ++str_len) {
             if (p[str_len] == 0) {
                 found_null = true;
                 break;
             } else if (p[str_len] >= 128) {
-                printf("[server] handle_publish: invalid ASCII character received from client\n");
+                //srv_log(server, "[server] handle_publish: invalid ASCII character received from client\n");
 
                 clean_up = true;
 
@@ -571,7 +632,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         }
 
         if (!found_null) {
-            printf("[server] handle_publish: non null terminated string given by client\n");
+            srv_log(server, "[server] handle_publish: non null terminated string given by client\n");
 
             clean_up = true;
 
@@ -581,7 +642,7 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         char *str = calloc(sizeof(char), str_len);
 
         if (str == NULL) {
-            printf("[server] handle_publish: failed allocating string\n");
+            srv_log(server, "[server] handle_publish: failed allocating string\n");
 
             clean_up = true;
 
@@ -593,18 +654,14 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         files[allocated] = str;
         allocated += 1;
 
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_publish: str: \"%s\" %lu\n", str, str_len);
-        }
+        srv_log(server, "[server] handle_publish: str: \"%s\" %lu\n", str, str_len);
 
         p += str_len + 1;
         len -= str_len + 1;
     }
 
     if (clean_up) {
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_publish: cleaning up allocated strings\n");
-        }
+        srv_log(server, "[server] handle_publish: cleaning up allocated strings\n");
 
         for (size_t index = 0; index < allocated; ++index) {
             free(files[index]);
@@ -619,13 +676,13 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
         client->files_len = files_len;
         client->files = files;
 
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_publish: client published %u\n", client->id);
+        srv_log(server, "[server] handle_publish: client published %u\n", client->id);
 
-            for (size_t index = 0; index < client->files_len; ++index) {
-                printf("    %s\n", client->files[index]);
-            }
-        } else {
+        for (size_t index = 0; index < client->files_len; ++index) {
+            srv_log(server, "    %s\n", client->files[index]);
+        }
+
+        if (TEST_OUTPUT) {
             printf("TEST] PUBLISH %lu", client->files_len);
 
             for (size_t index = 0; index < client->files_len; ++index) {
@@ -637,12 +694,14 @@ void handle_publish(struct server *server, struct client *client, uint8_t *buffe
     }
 }
 
-struct client* search_client_files(const char *find, struct client *client) {
+struct client* search_client_files(struct server* server, const char *find, struct client *client) {
     // if we had string lengths before hand this could probably be simpler
     for (size_t file_index = 0; file_index < client->files_len; ++file_index) {
         bool invalid = false;
         bool reached_end = false;
         size_t index = 0;
+
+        srv_log(server, "[server]     checking \"%s\"\n", client->files[file_index]);
 
         while (1) {
             if (client->files[file_index][index] == 0) {
@@ -672,17 +731,13 @@ struct client* search_client_files(const char *find, struct client *client) {
 
 void handle_search(struct server *server, struct client *client, uint8_t *buffer, size_t len) {
     if (client->type == CLIENT_UNKNOWN) {
-        printf("[server] handle_publish: client has not joined or registered\n");
+        srv_log(server, "[server] handle_publish: client has not joined or registered\n");
         return;
     }
 
     if (len >= 100) {
-        printf("[server] handle_search: received too many bytes from client\n");
+        srv_log(server, "[server] handle_search: received too many bytes from client\n");
         return;
-    }
-
-    if (CUSTOM_OUTPUT) {
-        printf("[server] handle_search: client searching files\n");
     }
 
     uint8_t response[10] = {0};
@@ -690,20 +745,20 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
     // check to make sure that the string we are given is a valid ASCII string
     for (size_t check = 0; check < len; ++check) {
         if (buffer[check] >= 128) {
-            printf("[server] handle_search: file name contains non ASCII characters\n");
+            srv_log(server, "[server] handle_search: file name contains non ASCII characters\n");
 
             if (send_bytes(client->sock, response, 10) != 0) {
-                perror("[server] handle_search: error sending resposne");
+                srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
                 return;
             }
         }
     }
 
     if (buffer[len - 1] != 0) {
-        printf("[server] handle_search: non null terminated string from client\n");
+        srv_log(server, "[server] handle_search: non null terminated string from client\n");
 
         if (send_bytes(client->sock, response, 10) != 0) {
-            perror("[server] handle_search: error sending resposne");
+            srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
             return;
         }
     }
@@ -711,64 +766,59 @@ void handle_search(struct server *server, struct client *client, uint8_t *buffer
     struct client *found = NULL;
     char *p = (char *)buffer;
 
+    srv_log(server, "[server] handle_search: client %u searching files for %s\n", client->id, p);
+
     for (size_t index = 0; index < server->max_conn; ++index) {
         if (!server->clients[index].active) {
             continue;
         }
 
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_search: checking client: %u\n", server->clients[index].id);
-        }
+        srv_log(server, "[server] handle_search: checking client: %u\n", server->clients[index].id);
 
-        found = search_client_files(p, &server->clients[index]);
+        found = search_client_files(server, p, &server->clients[index]);
 
         if (found != NULL) {
-            if (CUSTOM_OUTPUT) {
-                printf("[server] handle_search: found file. id: %u\n", found->id);
-            }
+            srv_log(server, "[server] handle_search: found file. id: %u\n", found->id);
 
             break;
         }
     }
 
     if (found == NULL) {
-        if (CUSTOM_OUTPUT) {
-            printf("[server] handle_search: failed to find file\n");
-        } else {
+        srv_log(server, "[server] handle_search: failed to find file\n");
+
+        if (TEST_OUTPUT) {
             printf("TEST] SEARCH %s 0 0.0.0.0:0\n", p);
         }
     } else {
         // since we do not care if the client connects with an v4 or v6
         // address we have to check to make sure that the client is v4
-        if (client->addr.sa_family == AF_INET) {
-            uint32_t id = htonl(client->id);
+        if (found->addr.sa_family == AF_INET) {
+            uint32_t id = htonl(found->id);
             memcpy(response, &id, 4);
 
-            struct sockaddr_in *v4 = (struct sockaddr_in *)&client->addr;
+            struct sockaddr_in *v4 = (struct sockaddr_in *)&found->addr;
             memcpy(response + 4, &v4->sin_addr.s_addr, 4);
-            uint16_t port = htons(v4->sin_port);
-            memcpy(response + 8, &port, 2);
+            memcpy(response + 8, &v4->sin_port, 2);
 
-            if (!CUSTOM_OUTPUT) {
+            if (TEST_OUTPUT) {
                 char ip[INET6_ADDRSTRLEN];
 
                 if (inet_ntop(AF_INET, &v4->sin_addr, ip, INET6_ADDRSTRLEN) == NULL) {
-                    perror("[server] handle_search: failed to create ipv4 string from client\n");
+                    srv_log(server, "[server] handle_search: failed to create ipv4 string from client: %s\n", strerror(errno));
                 } else {
-                    printf("TEST] SEARCH %s %u %s:%u\n", p, found->id, ip, v4->sin_port);
+                    printf("TEST] SEARCH %s %u %s:%u\n", p, found->id, ip, ntohs(v4->sin_port));
                 }
             }
         } else {
-            printf("[server] handle_search: client is using IPv6 address\n");
+            srv_log(server, "[server] handle_search: client is using non IPv4 address\n");
         }
     }
 
-    if (CUSTOM_OUTPUT) {
-        printf("[server] handle_search: sending response\n");
-    }
+    srv_log(server, "[server] handle_search: sending response\n");
 
     if (send_bytes(client->sock, response, 10) != 0) {
-        perror("[server] handle_search: error sending resposne");
+        srv_log(server, "[server] handle_search: error sending resposne: %s\n", strerror(errno));
     }
 }
 
@@ -789,41 +839,45 @@ int send_bytes(int sock, const uint8_t *buff, size_t len) {
     return 0;
 }
 
-void print_buffer(const uint8_t *buff, size_t length, uint8_t flags) {
-    printf("buffer:");
+void print_buffer(FILE* output, const uint8_t *buff, size_t length, uint8_t flags) {
+    fprintf(output, "buffer:");
 
     for (size_t index = 0; index < length; ++index) {
         if (buff[index] <= 0x0f) {
-            printf(" 0%x", buff[index]);
+            fprintf(output, " 0%x", buff[index]);
         } else {
-            printf(" %x", buff[index]);
+            fprintf(output, " %x", buff[index]);
         }
     }
 
     if ((flags & VERBOSE) == VERBOSE) {
-        printf("\n      :");
+        fprintf(output, "\n      :");
 
         for (size_t index = 0; index < length; ++index) {
             if (buff[index] == '\n') {
                 // if the characters is \n then we will escape and display it
-                printf(" \\n");
+                fprintf(output, " \\n");
             } else if (buff[index] < 32) {
                 // vs trying to print the control characters we will just print
                 // CC for "control character"
-                printf(" CC");
+                fprintf(output, " CC");
+            } else if (buff[index] >= 128) {
+                // this is an extended ascii character but we are not going to
+                // print it
+                fprintf(output, " EE");
             } else {
                 // a printable character
-                printf("  %c", buff[index]);
+                fprintf(output, "  %c", buff[index]);
             }
         }
 
-        printf("\n");
+        fprintf(output, "\n");
     } else {
-        printf("\n");
+        fprintf(output, "\n");
     }
 }
 
-int bind_and_listen(const char *service) {
+int bind_and_listen(struct server* server, const char *service) {
     struct addrinfo hints;
     struct addrinfo *rp, *result;
     int s;
@@ -837,7 +891,7 @@ int bind_and_listen(const char *service) {
 
     /* Get local address info */
     if ((s = getaddrinfo(NULL, service, &hints, &result)) != 0) {
-        fprintf(stderr, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(s));
+        srv_log(server, "[server] bind_and_listen: getaddrinfo: %s\n", gai_strerror(s));
         return -1;
     }
 
@@ -860,8 +914,10 @@ int bind_and_listen(const char *service) {
     }
 
     if (listen(s, MAX_PENDING) == -1) {
-        perror("[server] bind_and_listen: listen");
+        srv_log(server, "[server] bind_and_listen: listen: %s\n", strerror(errno));
+
         close(s);
+
         return -1;
     }
 

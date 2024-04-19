@@ -312,6 +312,10 @@ fn main() {
         }
     };
 
+    if let Ok(sockaddr) = conn.local_addr() {
+        println!("local addr: {sockaddr}");
+    }
+
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     let mut input = String::new();
