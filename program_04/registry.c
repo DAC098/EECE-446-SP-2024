@@ -1,5 +1,5 @@
 // EECE-446-SP-2024
-// David Cathers & Maddison Webb
+// David Cathers & Madison Webb
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -35,7 +35,7 @@ void handle_signal(int signo);
  * the three different states for a connected client
  */
 enum client_state {
-    // the client as connected but join joined or registered
+    // the client is connected but not join joined or registered
     CLIENT_UNKNOWN,
     // the client has joined
     CLIENT_JOINED,
